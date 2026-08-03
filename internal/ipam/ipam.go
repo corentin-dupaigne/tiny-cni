@@ -11,7 +11,7 @@ import (
 const Subnet string = "172.17.17.0/24"
 const StoragePath string = "/tmp/tiny-cni-counter"
 
-func getNextIp(subnet string, storagePath string) (string, error) {
+func GetNextIp(subnet string, storagePath string) (string, error) {
 	var availableIp netip.Addr
 
 	prefix, err := netip.ParsePrefix(subnet)
