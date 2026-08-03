@@ -13,6 +13,8 @@ import (
 )
 
 func SetupVeth(args *cni.Args) error {
+	success := false
+
 	hostIFNAME := netlink.NewLinkAttrs()
 	hostIFNAME.Name = "veth0" // should be randomly generated later to avoid conflicts
 
@@ -35,6 +37,15 @@ func SetupVeth(args *cni.Args) error {
 	if err != nil {
 		return fmt.Errorf("deploying veth: %w", err)
 	}
+
+	defer func() {
+		if !success {
+			err := netlink.LinkDel(veth)
+			if err != nil {
+				slog.Error("Tearing down created veth", "success", success, "err", err)
+			}
+		}
+	}()
 
 	slog.Debug("Set host interface UP")
 	err = netlink.LinkSetUp(veth)
@@ -60,42 +71,42 @@ func SetupVeth(args *cni.Args) error {
 		}
 
 		parsedIp, err := netlink.ParseAddr(ip)
-		slog.Debug("Parsed IP", "IP", parsedIp)
 		if err != nil {
 			ch <- fmt.Errorf("parsing ip: %w", err)
 			return
 		}
+		slog.Debug("Parsed IP", "IP", parsedIp)
 
 		podIf, err := netlink.LinkByName(args.IfName)
-		slog.Debug("Searched for pod's interface", "if", podIf)
 		if err != nil {
 			ch <- fmt.Errorf("searching pod's interface: %w", err)
 			return
 		}
+		slog.Debug("Searched for pod's interface", "if", podIf)
 
 		err = netlink.AddrAdd(podIf, parsedIp)
-		slog.Debug("Added addr to pod's interface", "if", podIf, "addr", parsedIp)
 		if err != nil {
-			ch <- fmt.Errorf("adding addr to pod's interface %w:", err)
+			ch <- fmt.Errorf("adding addr to pod's interface: %w", err)
 			return
 		}
+		slog.Debug("Added addr to pod's interface", "if", podIf, "addr", parsedIp)
 
 		err = netlink.LinkSetUp(podIf)
 		if err != nil {
-			ch <- fmt.Errorf("set up pod's interface %w:", err)
+			ch <- fmt.Errorf("set up pod's interface: %w", err)
 			return
 		}
 
 		loIf, err := netlink.LinkByName("lo")
-		slog.Debug("Searched for pod's lo interface", "if", loIf)
 		if err != nil {
-			ch <- fmt.Errorf("searching pod's lo interface %w:", err)
+			ch <- fmt.Errorf("searching pod's lo interface: %w", err)
 			return
 		}
+		slog.Debug("Searched for pod's lo interface", "if", loIf)
 
 		err = netlink.LinkSetUp(loIf)
 		if err != nil {
-			ch <- fmt.Errorf("set up pod's lo interface %w:", err)
+			ch <- fmt.Errorf("set up pod's lo interface: %w", err)
 			return
 		}
 
@@ -107,6 +118,8 @@ func SetupVeth(args *cni.Args) error {
 	if res != nil {
 		return res
 	}
+
+	success = true
 
 	return nil
 }
