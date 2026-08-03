@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
 
 	"github.com/corentin-dupaigne/tiny-cni/internal/cni"
 	"github.com/corentin-dupaigne/tiny-cni/internal/ipam"
@@ -25,6 +26,8 @@ func SetupVeth(args *cni.Args) error {
 		return fmt.Errorf("opening namespace file: %w", err)
 	}
 
+	defer file.Close()
+
 	veth.PeerNamespace = netlink.NsFd(file.Fd())
 
 	slog.Debug("Deploying veth between host and pod's namespace")
@@ -39,36 +42,60 @@ func SetupVeth(args *cni.Args) error {
 		return fmt.Errorf("set up host interface %w:", err)
 	}
 
+	ip, err := ipam.GetNextIp(ipam.Subnet, ipam.StoragePath)
+	slog.Debug("Available IP returned by IPAM", "IP", ip)
+	if err != nil {
+		return err
+	}
+
 	// switch to pod's namespace, set pod's ip
 	ch := make(chan error)
 	go func(fd int, nstype int) {
+		runtime.LockOSThread()
+
 		err := unix.Setns(fd, nstype)
 		if err != nil {
 			ch <- fmt.Errorf("switching netns: %w", err)
 			return
 		}
 
-		ip, err := ipam.GetNextIp(ipam.Subnet, ipam.StoragePath)
-		if err != nil {
-			ch <- err
-			return
-		}
-
 		parsedIp, err := netlink.ParseAddr(ip)
+		slog.Debug("Parsed IP", "IP", parsedIp)
 		if err != nil {
 			ch <- fmt.Errorf("parsing ip: %w", err)
 			return
 		}
 
 		podIf, err := netlink.LinkByName(args.IfName)
+		slog.Debug("Searched for pod's interface", "if", podIf)
 		if err != nil {
 			ch <- fmt.Errorf("searching pod's interface: %w", err)
 			return
 		}
 
 		err = netlink.AddrAdd(podIf, parsedIp)
+		slog.Debug("Added addr to pod's interface", "if", podIf, "addr", parsedIp)
 		if err != nil {
-			ch <- fmt.Errorf("adding addr to pod's interface: %w", err)
+			ch <- fmt.Errorf("adding addr to pod's interface %w:", err)
+			return
+		}
+
+		err = netlink.LinkSetUp(podIf)
+		if err != nil {
+			ch <- fmt.Errorf("set up pod's interface %w:", err)
+			return
+		}
+
+		loIf, err := netlink.LinkByName("lo")
+		slog.Debug("Searched for pod's lo interface", "if", loIf)
+		if err != nil {
+			ch <- fmt.Errorf("searching pod's lo interface %w:", err)
+			return
+		}
+
+		err = netlink.LinkSetUp(loIf)
+		if err != nil {
+			ch <- fmt.Errorf("set up pod's lo interface %w:", err)
 			return
 		}
 
@@ -80,8 +107,6 @@ func SetupVeth(args *cni.Args) error {
 	if res != nil {
 		return res
 	}
-
-	file.Close()
 
 	return nil
 }

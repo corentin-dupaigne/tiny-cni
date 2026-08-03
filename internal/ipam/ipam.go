@@ -48,5 +48,5 @@ func GetNextIp(subnet string, storagePath string) (string, error) {
 		return "", fmt.Errorf("writing in file %s: %w", storagePath, err)
 	}
 
-	return availableIp.String(), nil
+	return availableIp.String() + "/32", nil
 }
