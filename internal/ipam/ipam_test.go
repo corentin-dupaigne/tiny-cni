@@ -78,17 +78,46 @@ func isUsable(u, network, broadcast uint32) bool {
 	return u >= firstUsable(network) && u < broadcast
 }
 
+func mustNewAllocator(t *testing.T, subnet, storagePath string) *Allocator {
+	t.Helper()
+	a, err := NewAllocator(subnet, storagePath)
+	if err != nil {
+		t.Fatalf("NewAllocator(%q, %q): %v", subnet, storagePath, err)
+	}
+	return a
+}
+
+// ---------- constructor / gateway ----------
+
+func TestNewAllocatorRejectsInvalidSubnet(t *testing.T) {
+	if _, err := NewAllocator("not-a-subnet", freshStorage(t)); err == nil {
+		t.Fatalf("expected error for invalid subnet, got nil")
+	}
+}
+
+func TestGatewayIP(t *testing.T) {
+	subnet := "10.0.0.0/24"
+	network, _ := networkAndBroadcast(t, mustParseCIDR(t, subnet))
+	alloc := mustNewAllocator(t, subnet, freshStorage(t))
+
+	want := uint32ToIP(network + 1)
+	if got := alloc.GatewayIP(); got != want {
+		t.Fatalf("GatewayIP() = %s, want %s", got, want)
+	}
+}
+
 // ---------- sequential ----------
 
 func TestSequentialAllocation(t *testing.T) {
 	path := freshStorage(t)
 	subnet := "10.0.0.0/24"
 	network, broadcast := networkAndBroadcast(t, mustParseCIDR(t, subnet))
+	alloc := mustNewAllocator(t, subnet, path)
 
 	const n = 20
 	var prev uint32
 	for i := 0; i < n; i++ {
-		ipStr, err := getNextIp(subnet, path)
+		ipStr, err := alloc.Allocate()
 		if err != nil {
 			t.Fatalf("allocation %d failed: %v", i, err)
 		}
@@ -112,11 +141,13 @@ func TestStatePersistsAcrossCalls(t *testing.T) {
 	path := freshStorage(t)
 	subnet := "10.5.0.0/24"
 
-	first, err := getNextIp(subnet, path)
+	// Two separate Allocator instances sharing a storage path prove that
+	// state lives in the file, not in the Allocator struct.
+	first, err := mustNewAllocator(t, subnet, path).Allocate()
 	if err != nil {
 		t.Fatalf("first allocation failed: %v", err)
 	}
-	second, err := getNextIp(subnet, path)
+	second, err := mustNewAllocator(t, subnet, path).Allocate()
 	if err != nil {
 		t.Fatalf("second allocation failed: %v", err)
 	}
@@ -147,10 +178,11 @@ func TestDifferentCIDRs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := freshStorage(t)
 			network, broadcast := networkAndBroadcast(t, mustParseCIDR(t, tc.subnet))
+			alloc := mustNewAllocator(t, tc.subnet, path)
 
 			var prev uint32
 			for i := 0; i < tc.allocs; i++ {
-				ipStr, err := getNextIp(tc.subnet, path)
+				ipStr, err := alloc.Allocate()
 				if err != nil {
 					t.Fatalf("alloc %d in %s failed: %v", i, tc.subnet, err)
 				}
@@ -184,13 +216,16 @@ func TestDifferentSubnets(t *testing.T) {
 	netA, bcA := networkAndBroadcast(t, mustParseCIDR(t, subnetA))
 	netB, bcB := networkAndBroadcast(t, mustParseCIDR(t, subnetB))
 
+	allocA := mustNewAllocator(t, subnetA, pathA)
+	allocB := mustNewAllocator(t, subnetB, pathB)
+
 	var prevA, prevB uint32
 	for i := 0; i < 6; i++ {
-		aStr, err := getNextIp(subnetA, pathA)
+		aStr, err := allocA.Allocate()
 		if err != nil {
 			t.Fatalf("subnet A alloc %d failed: %v", i, err)
 		}
-		bStr, err := getNextIp(subnetB, pathB)
+		bStr, err := allocB.Allocate()
 		if err != nil {
 			t.Fatalf("subnet B alloc %d failed: %v", i, err)
 		}
@@ -222,6 +257,7 @@ func TestConcurrentAllocationsAreUnique(t *testing.T) {
 	path := freshStorage(t)
 	subnet := "10.0.0.0/16"
 	network, broadcast := networkAndBroadcast(t, mustParseCIDR(t, subnet))
+	alloc := mustNewAllocator(t, subnet, path)
 
 	const goroutines = 20
 	const perGoroutine = 50
@@ -240,11 +276,11 @@ func TestConcurrentAllocationsAreUnique(t *testing.T) {
 			defer wg.Done()
 			local := make([]uint32, 0, perGoroutine)
 			for i := 0; i < perGoroutine; i++ {
-				ipStr, err := getNextIp(subnet, path)
+				ipStr, err := alloc.Allocate()
 				if err != nil {
 					mu.Lock()
 					if firstErr == nil {
-						firstErr = fmt.Errorf("getNextIp: %w", err)
+						firstErr = fmt.Errorf("Allocate: %w", err)
 					}
 					mu.Unlock()
 					return
@@ -294,10 +330,11 @@ func TestExhaustionAndBoundary(t *testing.T) {
 	ipnet := mustParseCIDR(t, subnet)
 	network, broadcast := networkAndBroadcast(t, ipnet)
 	total := broadcast - network + 1
+	alloc := mustNewAllocator(t, subnet, path)
 
 	var got []uint32
 	for {
-		ipStr, err := getNextIp(subnet, path)
+		ipStr, err := alloc.Allocate()
 		if err != nil {
 			break // pool exhausted
 		}
@@ -333,7 +370,7 @@ func TestExhaustionAndBoundary(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		if ip, err := getNextIp(subnet, path); err == nil {
+		if ip, err := alloc.Allocate(); err == nil {
 			t.Fatalf("expected error after exhaustion, but got %s", ip)
 		}
 	}
