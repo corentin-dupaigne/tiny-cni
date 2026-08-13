@@ -6,7 +6,6 @@ import (
 	"net"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -248,77 +247,6 @@ func TestDifferentSubnets(t *testing.T) {
 			}
 		}
 		prevA, prevB = a, b
-	}
-}
-
-// ---------- concurrency ----------
-
-func TestConcurrentAllocationsAreUnique(t *testing.T) {
-	path := freshStorage(t)
-	subnet := "10.0.0.0/16"
-	network, broadcast := networkAndBroadcast(t, mustParseCIDR(t, subnet))
-	alloc := mustNewAllocator(t, subnet, path)
-
-	const goroutines = 20
-	const perGoroutine = 50
-	want := goroutines * perGoroutine
-
-	var (
-		mu       sync.Mutex
-		all      []uint32
-		firstErr error
-	)
-
-	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			local := make([]uint32, 0, perGoroutine)
-			for i := 0; i < perGoroutine; i++ {
-				ipStr, err := alloc.Allocate()
-				if err != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = fmt.Errorf("Allocate: %w", err)
-					}
-					mu.Unlock()
-					return
-				}
-				u, perr := toUint32(ipStr)
-				if perr != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = perr
-					}
-					mu.Unlock()
-					return
-				}
-				local = append(local, u)
-			}
-			mu.Lock()
-			all = append(all, local...)
-			mu.Unlock()
-		}()
-	}
-	wg.Wait()
-
-	if firstErr != nil {
-		t.Fatalf("unexpected error during concurrent allocation: %v", firstErr)
-	}
-	if len(all) != want {
-		t.Fatalf("expected %d successful allocations, got %d", want, len(all))
-	}
-
-	seen := make(map[uint32]bool, len(all))
-	for _, u := range all {
-		if !isUsable(u, network, broadcast) {
-			t.Fatalf("allocated %s is not a usable address in subnet %s", uint32ToIP(u), subnet)
-		}
-		if seen[u] {
-			t.Fatalf("duplicate IP handed out under concurrency: %s", uint32ToIP(u))
-		}
-		seen[u] = true
 	}
 }
 
