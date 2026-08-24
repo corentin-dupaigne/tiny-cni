@@ -53,11 +53,17 @@ func SetupVeth(args *cni.Args) error {
 		return fmt.Errorf("set up host interface %w:", err)
 	}
 
-	ip, err := ipam.GetNextIp(ipam.Subnet, ipam.StoragePath)
-	slog.Debug("Available IP returned by IPAM", "IP", ip)
+	alloc, err := ipam.NewAllocator("172.17.17.0/24", "/tmp/tiny-cni-counter")
+	if err != nil {
+		return fmt.Errorf("Instantiating allocator: %w", err)
+	}
+	slog.Debug("Instantiated allocator")
+
+	ip, err := alloc.Allocate()
 	if err != nil {
 		return err
 	}
+	slog.Debug("Available IP returned by IPAM", "IP", ip)
 
 	// switch to pod's namespace, set pod's ip
 	ch := make(chan error)
@@ -82,14 +88,14 @@ func SetupVeth(args *cni.Args) error {
 			ch <- fmt.Errorf("searching pod's interface: %w", err)
 			return
 		}
-		slog.Debug("Searched for pod's interface", "if", podIf)
+		slog.Debug("Searched for pod's interface")
 
 		err = netlink.AddrAdd(podIf, parsedIp)
 		if err != nil {
 			ch <- fmt.Errorf("adding addr to pod's interface: %w", err)
 			return
 		}
-		slog.Debug("Added addr to pod's interface", "if", podIf, "addr", parsedIp)
+		slog.Debug("Added addr to pod's interface", "addr", parsedIp)
 
 		err = netlink.LinkSetUp(podIf)
 		if err != nil {
@@ -102,7 +108,7 @@ func SetupVeth(args *cni.Args) error {
 			ch <- fmt.Errorf("searching pod's lo interface: %w", err)
 			return
 		}
-		slog.Debug("Searched for pod's lo interface", "if", loIf)
+		slog.Debug("Searched for pod's lo interface")
 
 		err = netlink.LinkSetUp(loIf)
 		if err != nil {

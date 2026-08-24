@@ -2,11 +2,13 @@ package main
 
 import (
 	"fmt"
-	"github.com/corentin-dupaigne/tiny-cni/internal/cni"
-	"github.com/corentin-dupaigne/tiny-cni/internal/config"
 	"io"
 	"log/slog"
 	"os"
+
+	"github.com/corentin-dupaigne/tiny-cni/internal/cni"
+	"github.com/corentin-dupaigne/tiny-cni/internal/config"
+	"github.com/corentin-dupaigne/tiny-cni/internal/network"
 )
 
 func main() {
@@ -30,6 +32,14 @@ func run() error {
 	args := cni.LoadArgs()
 
 	slog.Debug("Loaded CNI args", "args", args)
+
+	err := network.SetupVeth(args)
+
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	return nil
 
 	rawConfig, err := io.ReadAll(os.Stdin)
 	if err != nil {
