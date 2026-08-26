@@ -31,7 +31,7 @@ func (a *Allocator) GatewayIP() string {
 	return a.subnet.Masked().Addr().Next().String()
 }
 
-func (a *Allocator) Allocate() (string, error) {
+func (a *Allocator) Allocate() (netip.Prefix, error) {
 	var availableIp netip.Addr
 
 	data, err := os.ReadFile(a.storagePath)
@@ -42,26 +42,26 @@ func (a *Allocator) Allocate() (string, error) {
 		availableIp = networkIp.Next().Next()
 
 	} else if err != nil {
-		return "", fmt.Errorf("reading file %s: %w", a.storagePath, err)
+		return netip.Prefix{}, fmt.Errorf("reading file %s: %w", a.storagePath, err)
 	} else {
 		availableIp, err = netip.ParseAddr(string(data))
 		if err != nil {
-			return "", fmt.Errorf("parsing IP from file %s: %w", a.storagePath, err)
+			return netip.Prefix{}, fmt.Errorf("parsing IP from file %s: %w", a.storagePath, err)
 		}
 	}
 
 	if !availableIp.IsValid() {
-		return "", fmt.Errorf("parsed IP is invalid: %s", availableIp)
+		return netip.Prefix{}, fmt.Errorf("parsed IP is invalid: %s", availableIp)
 	}
 
 	if !a.subnet.Contains(availableIp.Next()) {
-		return "", fmt.Errorf("no IP addresses available in range %s", a.subnet)
+		return netip.Prefix{}, fmt.Errorf("no IP addresses available in range %s", a.subnet)
 	}
 
 	err = os.WriteFile(a.storagePath, []byte(availableIp.Next().String()), 0644)
 	if err != nil {
-		return "", fmt.Errorf("writing in file %s: %w", a.storagePath, err)
+		return netip.Prefix{}, fmt.Errorf("writing in file %s: %w", a.storagePath, err)
 	}
 
-	return availableIp.String(), nil
+	return netip.PrefixFrom(availableIp, a.subnet.Bits()), nil
 }
