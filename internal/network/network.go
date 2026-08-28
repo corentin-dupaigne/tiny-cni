@@ -14,18 +14,28 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const (
+	// hardcoded for now, should be parsed from config later
+	ipamStatePath = "/tmp/tinycni-counter"
+	perNodeSubnet = "10.244.0.0/24"
+
+	devicePrefix = "tcni"
+
+	bridgeName = devicePrefix + "-bridge"
+)
+
 func generateRandName() (string, error) {
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generating random veth name: %w", err)
+		return "", fmt.Errorf("generating random name: %w", err)
 	}
 	// can't use full tiny-cni name because it would overflow 15 bytes kernel limit for interface names
-	return fmt.Sprintf("tcni-%x", b), nil
+	return fmt.Sprintf("%s-%x", devicePrefix, b), nil
 }
 
 func setupBridge() (netlink.Link, error) {
 	link := netlink.NewLinkAttrs()
-	link.Name = "tcni-bridge"
+	link.Name = bridgeName
 
 	bridge := &netlink.Bridge{LinkAttrs: link}
 
@@ -43,7 +53,7 @@ func setupBridge() (netlink.Link, error) {
 }
 
 func bridge() (netlink.Link, error) {
-	bridge, err := netlink.LinkByName("tcni-bridge")
+	bridge, err := netlink.LinkByName(bridgeName)
 
 	var notFound netlink.LinkNotFoundError
 	if err != nil && errors.As(err, &notFound) {
@@ -107,8 +117,7 @@ func SetupVeth(args *cni.Args) error {
 	}
 	slog.Debug("Set host interface UP")
 
-	// hardcoded for now, to refactor later with constants
-	alloc, err := ipam.NewAllocator("172.17.17.0/24", "/tmp/tinycni-counter")
+	alloc, err := ipam.NewAllocator(perNodeSubnet, ipamStatePath)
 	if err != nil {
 		return fmt.Errorf("Instantiating allocator: %w", err)
 	}
