@@ -1,4 +1,4 @@
-package config
+package cni
 
 import (
 	"encoding/json"
