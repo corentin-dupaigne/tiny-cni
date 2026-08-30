@@ -8,32 +8,29 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/corentin-dupaigne/tiny-cni/internal/cni"
 	"github.com/corentin-dupaigne/tiny-cni/internal/ipam"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
 
-const (
-	// hardcoded for now, should be parsed from config later
-	ipamStatePath = "/tmp/tinycni-counter"
-	perNodeSubnet = "10.244.0.0/24"
+type SetupParams struct {
+	StoragePath string
+	Subnet      string
+	Prefix      string
+	Bridge      string
+	IfName      string
+	Netns       string
+}
 
-	devicePrefix = "tcni"
-
-	bridgeName = devicePrefix + "-bridge"
-)
-
-func generateRandName() (string, error) {
+func generateRandName(prefix string) (string, error) {
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("generating random name: %w", err)
 	}
-	// can't use full tiny-cni name because it would overflow 15 bytes kernel limit for interface names
-	return fmt.Sprintf("%s-%x", devicePrefix, b), nil
+	return fmt.Sprintf("%s-%x", prefix, b), nil
 }
 
-func setupBridge() (netlink.Link, error) {
+func setupBridge(bridgeName string) (netlink.Link, error) {
 	link := netlink.NewLinkAttrs()
 	link.Name = bridgeName
 
@@ -52,12 +49,12 @@ func setupBridge() (netlink.Link, error) {
 	return bridge, nil
 }
 
-func bridge() (netlink.Link, error) {
+func bridge(bridgeName string) (netlink.Link, error) {
 	bridge, err := netlink.LinkByName(bridgeName)
 
 	var notFound netlink.LinkNotFoundError
 	if err != nil && errors.As(err, &notFound) {
-		return setupBridge()
+		return setupBridge(bridgeName)
 	} else if err != nil {
 		return nil, fmt.Errorf("searching for bridge by name: %w", err)
 	}
@@ -65,11 +62,11 @@ func bridge() (netlink.Link, error) {
 	return bridge, nil
 }
 
-func SetupVeth(args *cni.Args) error {
+func Setup(args SetupParams) error {
 	success := false
 
 	hostIFNAME := netlink.NewLinkAttrs()
-	name, err := generateRandName()
+	name, err := generateRandName(args.Prefix)
 	if err != nil {
 		return fmt.Errorf("generating random name: %w", err)
 	}
@@ -78,7 +75,7 @@ func SetupVeth(args *cni.Args) error {
 	veth := netlink.NewVeth(hostIFNAME)
 	veth.PeerName = args.IfName
 
-	bridge, err := bridge()
+	bridge, err := bridge(args.Bridge)
 	if err != nil {
 		return err
 	}
@@ -117,7 +114,7 @@ func SetupVeth(args *cni.Args) error {
 	}
 	slog.Debug("Set host interface UP")
 
-	alloc, err := ipam.NewAllocator(perNodeSubnet, ipamStatePath)
+	alloc, err := ipam.NewAllocator(args.Subnet, args.StoragePath)
 	if err != nil {
 		return fmt.Errorf("Instantiating allocator: %w", err)
 	}
