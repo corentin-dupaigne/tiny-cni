@@ -1,10 +1,8 @@
 package cni
 
-import (
-	"github.com/corentin-dupaigne/tiny-cni/internal/config"
-)
+import "github.com/containernetworking/cni/pkg/skel"
 
 // to be implemented
-func Del(args *Args, cfg *config.Config) error {
+func Del(_ *skel.CmdArgs) error {
 	return nil
 }
