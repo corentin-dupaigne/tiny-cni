@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"runtime"
 
@@ -20,6 +21,24 @@ type SetupParams struct {
 	Bridge      string
 	IfName      string
 	Netns       string
+}
+
+type resIp struct {
+	Address     net.IPNet
+	Gateway     string
+	IpInterface int
+}
+
+type resInterface struct {
+	Name    string
+	Mac     string
+	Mtu     int
+	Sandbox string
+}
+
+type SetupSuccess struct {
+	Interfaces []resInterface
+	Ips        []resIp
 }
 
 func generateRandName(prefix string) (string, error) {
@@ -62,13 +81,17 @@ func bridge(bridgeName string) (netlink.Link, error) {
 	return bridge, nil
 }
 
-func Setup(args SetupParams) error {
+func Setup(args SetupParams) (*SetupSuccess, error) {
 	success := false
+
+	res := SetupSuccess{}
+	res.Interfaces = []resInterface{}
+	res.Ips = []resIp{}
 
 	hostIFNAME := netlink.NewLinkAttrs()
 	name, err := generateRandName(args.Prefix)
 	if err != nil {
-		return fmt.Errorf("generating random name: %w", err)
+		return &SetupSuccess{}, fmt.Errorf("generating random name: %w", err)
 	}
 	hostIFNAME.Name = name
 
@@ -77,15 +100,14 @@ func Setup(args SetupParams) error {
 
 	bridge, err := bridge(args.Bridge)
 	if err != nil {
-		return err
+		return &SetupSuccess{}, err
 	}
 	slog.Debug("Bridge found", "bridge name", bridge.Attrs().Name)
-	veth.MasterIndex = bridge.Attrs().Index
 
 	// open pod's namespace file to obtain its fd
 	file, err := os.OpenFile(args.Netns, os.O_RDONLY, 0600)
 	if err != nil {
-		return fmt.Errorf("opening namespace file: %w", err)
+		return &SetupSuccess{}, fmt.Errorf("opening namespace file: %w", err)
 	}
 	slog.Debug("Openend given pod's namespace file", "ns", args.Netns)
 
@@ -95,9 +117,20 @@ func Setup(args SetupParams) error {
 
 	err = netlink.LinkAdd(veth)
 	if err != nil {
-		return fmt.Errorf("deploying veth: %w", err)
+		return &SetupSuccess{}, fmt.Errorf("deploying veth: %w", err)
 	}
-	slog.Debug("Deployed veth between host and pod's namespace")
+	slog.Debug("Deployed veth on host's side")
+
+	err = netlink.LinkSetMaster(veth, bridge)
+	if err != nil {
+		return &SetupSuccess{}, err
+	}
+
+	res.Interfaces = append(res.Interfaces, resInterface{
+		Name: veth.Name,
+		Mac:  veth.HardwareAddr.String(),
+		Mtu:  veth.MTU,
+	})
 
 	defer func() {
 		if !success {
@@ -110,19 +143,19 @@ func Setup(args SetupParams) error {
 
 	err = netlink.LinkSetUp(veth)
 	if err != nil {
-		return fmt.Errorf("set up host interface %w:", err)
+		return &SetupSuccess{}, fmt.Errorf("set up host interface: %w", err)
 	}
 	slog.Debug("Set host interface UP")
 
 	alloc, err := ipam.NewAllocator(args.Subnet, args.StoragePath)
 	if err != nil {
-		return fmt.Errorf("Instantiating allocator: %w", err)
+		return &SetupSuccess{}, fmt.Errorf("Instantiating allocator: %w", err)
 	}
-	slog.Debug("Instantiated allocator")
+	slog.Debug("Instantiated allocator", "allocator", *alloc)
 
 	ip, err := alloc.Allocate()
 	if err != nil {
-		return err
+		return &SetupSuccess{}, err
 	}
 	slog.Debug("Available IP returned by IPAM", "IP", ip)
 
@@ -151,12 +184,24 @@ func Setup(args SetupParams) error {
 		}
 		slog.Debug("Searched for pod's interface")
 
+		res.Interfaces = append(res.Interfaces, resInterface{
+			Name:    podIf.Attrs().Name,
+			Mac:     podIf.Attrs().HardwareAddr.String(),
+			Mtu:     podIf.Attrs().MTU,
+			Sandbox: args.Netns,
+		})
+
 		err = netlink.AddrAdd(podIf, parsedIp)
 		if err != nil {
 			ch <- fmt.Errorf("adding addr to pod's interface: %w", err)
 			return
 		}
 		slog.Debug("Added addr to pod's interface", "addr", parsedIp.String())
+
+		res.Ips = append(res.Ips, resIp{
+			Address:     *parsedIp.IPNet,
+			IpInterface: len(res.Interfaces) - 1,
+		})
 
 		err = netlink.LinkSetUp(podIf)
 		if err != nil {
@@ -181,13 +226,13 @@ func Setup(args SetupParams) error {
 		ch <- nil
 	}(int(file.Fd()), unix.CLONE_NEWNET)
 
-	res := <-ch
+	err = <-ch
 
-	if res != nil {
-		return res
+	if err != nil {
+		return &SetupSuccess{}, err
 	}
 
 	success = true
 
-	return nil
+	return &res, nil
 }
