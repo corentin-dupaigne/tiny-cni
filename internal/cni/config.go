@@ -3,17 +3,21 @@ package cni
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/containernetworking/cni/pkg/types"
 )
 
 type ipamConfig struct {
-	Type string `json:"type"`
+	types.IPAM
+	Subnet      string `json:"subnet"`
+	StoragePath string `json:"storagePath"`
 }
 
 type Config struct {
-	CniVersion string     `json:"cniVersion"`
-	Name       string     `json:"name"`
-	Type       string     `json:"type"`
-	Ipam       ipamConfig `json:"ipam"`
+	types.PluginConf
+	IPAM   ipamConfig `json:"ipam"`
+	Bridge string     `json:"bridge"`
+	Prefix string     `json:"prefix"`
 }
 
 func Parse(data []byte) (*Config, error) {
