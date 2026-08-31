@@ -126,10 +126,15 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 		return &SetupSuccess{}, err
 	}
 
+	hostVeth, err := netlink.LinkByName(name)
+	if err != nil {
+		return &SetupSuccess{}, err
+	}
+
 	res.Interfaces = append(res.Interfaces, resInterface{
-		Name: veth.Name,
-		Mac:  veth.HardwareAddr.String(),
-		Mtu:  veth.MTU,
+		Name: hostVeth.Attrs().Name,
+		Mac:  hostVeth.Attrs().HardwareAddr.String(),
+		Mtu:  hostVeth.Attrs().MTU,
 	})
 
 	defer func() {
@@ -151,7 +156,7 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 	if err != nil {
 		return &SetupSuccess{}, fmt.Errorf("Instantiating allocator: %w", err)
 	}
-	slog.Debug("Instantiated allocator", "allocator", *alloc)
+	slog.Debug("Instantiated allocator")
 
 	ip, err := alloc.Allocate()
 	if err != nil {
