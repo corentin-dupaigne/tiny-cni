@@ -38,8 +38,6 @@ func (a *Allocator) GatewayIP() string {
 	return a.subnet.Masked().Addr().Next().String()
 }
 
-func (a *Allocator) Deallocate() (bool, error) {}
-
 func (a *Allocator) Allocate(containerID string) (netip.Prefix, error) {
 	state := IPAMState{}
 	var candidate *netip.Addr

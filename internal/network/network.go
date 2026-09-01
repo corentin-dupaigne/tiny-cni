@@ -21,6 +21,7 @@ type SetupParams struct {
 	Bridge      string
 	IfName      string
 	Netns       string
+	ContainerID string
 }
 
 type resIp struct {
@@ -158,7 +159,7 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 	}
 	slog.Debug("Instantiated allocator")
 
-	ip, err := alloc.Allocate()
+	ip, err := alloc.Allocate(args.ContainerID)
 	if err != nil {
 		return &SetupSuccess{}, err
 	}
