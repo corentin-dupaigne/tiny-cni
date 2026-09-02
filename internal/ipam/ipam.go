@@ -39,6 +39,31 @@ func (a *Allocator) GatewayIP() string {
 	return a.subnet.Masked().Addr().Next().String()
 }
 
+func (a *Allocator) Deallocate(containerID string) bool {
+	state := IPAMState{}
+
+	data, err := os.ReadFile(a.storagePath)
+	if err != nil {
+		return false
+	}
+
+	err = json.Unmarshal(data, &state)
+	if err != nil {
+		return false
+	}
+
+	if state.AllocatedSet[state.ContainerToIp[containerID]] == false {
+		return false
+	}
+
+	state.AllocatedSet[state.ContainerToIp[containerID]] = false
+
+	delete(state.ContainerToIp, containerID)
+
+	return false
+
+}
+
 func (a *Allocator) Allocate(containerID string) (netip.Prefix, error) {
 	state := IPAMState{}
 	var candidate *netip.Addr
