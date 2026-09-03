@@ -1,6 +1,7 @@
 package ipam
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,8 @@ type Allocator struct {
 	subnet      netip.Prefix
 	storagePath string
 	gatewayIP   netip.Addr
+	networkIP   netip.Addr
+	broadcastIP netip.Addr
 }
 
 type IPAMState struct {
@@ -31,11 +34,34 @@ func NewAllocator(subnet string, storagePath string) (*Allocator, error) {
 		return nil, fmt.Errorf("parsing prefix from subnet %s: %w", subnet, err)
 	}
 
+	broadcast := processBroadcastIP(prefix)
+
 	return &Allocator{
 		prefix,
 		storagePath,
 		prefix.Masked().Addr().Next(),
+		prefix.Masked().Addr(),
+		broadcast,
 	}, nil
+}
+
+func processBroadcastIP(prefix netip.Prefix) netip.Addr {
+	network := prefix.Masked().Addr()
+	networkBytes := network.As4()
+
+	mask := ^uint32(0) >> prefix.Masked().Bits()
+
+	broadcastBits := binary.BigEndian.Uint32(networkBytes[:]) | mask
+
+	var buf [4]byte
+
+	binary.BigEndian.PutUint32(buf[:], broadcastBits)
+
+	return netip.AddrFrom4(buf)
+}
+
+func (a *Allocator) BroadcastIP() string {
+	return a.broadcastIP.String()
 }
 
 func (a *Allocator) GatewayIP() string {
@@ -69,11 +95,10 @@ func (a *Allocator) Deallocate(containerID string) bool {
 
 func (a *Allocator) defaultState() *IPAMState {
 	state := &IPAMState{}
-	networkIP := a.subnet.Masked().Addr()
 	// set reserved addresses (network addr & gateway address) as allocated
 	state.AllocatedSet = make(map[netip.Addr]bool)
-	state.AllocatedSet[networkIP] = true
-	state.AllocatedSet[networkIP.Next()] = true
+	state.AllocatedSet[a.networkIP] = true
+	state.AllocatedSet[a.networkIP.Next()] = true
 
 	return state
 }
@@ -149,21 +174,26 @@ func (a *Allocator) Allocate(containerID string) (netip.Prefix, error) {
 	slog.Debug("Start allocator")
 
 	err := a.withLockedState(func(i *IPAMState) error {
+		val, ok := i.ContainerToIp[containerID]
+		if ok {
+			candidate = &val
+			return nil
+		}
+
 		if i.ContainerToIp == nil {
-			networkIP := a.subnet.Masked().Addr()
-			addr := networkIP.Next().Next()
+			addr := a.networkIP.Next().Next()
 			candidate = &addr
 		} else {
 			for _, ip := range i.ContainerToIp {
 				leftCandidate := ip.Prev()
-				leftCheck := !i.AllocatedSet[leftCandidate] && leftCandidate.IsValid() && a.subnet.Contains(leftCandidate)
+				leftCheck := !i.AllocatedSet[leftCandidate] && leftCandidate.IsValid() && a.subnet.Contains(leftCandidate) && leftCandidate != a.broadcastIP
 				if leftCheck {
 					candidate = &leftCandidate
 					break
 				}
 
 				rightCandidate := ip.Next()
-				rightCheck := !i.AllocatedSet[rightCandidate] && rightCandidate.IsValid() && a.subnet.Contains(rightCandidate)
+				rightCheck := !i.AllocatedSet[rightCandidate] && rightCandidate.IsValid() && a.subnet.Contains(rightCandidate) && rightCandidate != a.broadcastIP
 				if rightCheck {
 					candidate = &rightCandidate
 					break
