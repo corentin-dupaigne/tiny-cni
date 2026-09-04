@@ -68,29 +68,32 @@ func (a *Allocator) GatewayIP() string {
 	return a.subnet.Masked().Addr().Next().String()
 }
 
-func (a *Allocator) Deallocate(containerID string) bool {
-	state := IPAMState{}
+func (a *Allocator) Deallocate(containerID string) error {
+	// state := IPAMState{}
 
-	data, err := os.ReadFile(a.storagePath)
-	if err != nil {
-		return false
-	}
+	// data, err := os.ReadFile(a.storagePath)
+	// if err != nil {
+	// 	return false
+	// }
 
-	err = json.Unmarshal(data, &state)
-	if err != nil {
-		return false
-	}
+	// err = json.Unmarshal(data, &state)
+	// if err != nil {
+	// 	return false
+	// }
 
-	if state.AllocatedSet[state.ContainerToIp[containerID]] == false {
-		return false
-	}
+	err := a.withLockedState(func(a *IPAMState) error {
+		if a.AllocatedSet[a.ContainerToIp[containerID]] == false {
+			return nil
+		}
 
-	state.AllocatedSet[state.ContainerToIp[containerID]] = false
+		a.AllocatedSet[a.ContainerToIp[containerID]] = false
 
-	delete(state.ContainerToIp, containerID)
+		delete(a.ContainerToIp, containerID)
 
-	return false
+		return nil
+	})
 
+	return err
 }
 
 func (a *Allocator) defaultState() *IPAMState {
