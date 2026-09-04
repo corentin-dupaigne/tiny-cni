@@ -225,5 +225,9 @@ func (a *Allocator) Allocate(containerID string) (netip.Prefix, error) {
 
 	})
 
-	return netip.PrefixFrom(*candidate, a.subnet.Bits()), err
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+
+	return netip.PrefixFrom(*candidate, a.subnet.Bits()), nil
 }
