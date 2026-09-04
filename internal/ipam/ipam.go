@@ -1,16 +1,30 @@
 package ipam
 
 import (
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/netip"
 	"os"
+
+	"golang.org/x/sys/unix"
 )
 
 type Allocator struct {
 	subnet      netip.Prefix
 	storagePath string
 	gatewayIP   netip.Addr
+	networkIP   netip.Addr
+	broadcastIP netip.Addr
+}
+
+type IPAMState struct {
+	// containerID -> IP
+	ContainerToIp map[string]netip.Addr `json:"containerToIp"`
+	AllocatedSet  map[netip.Addr]bool   `json:"allocatedSet"`
 }
 
 func NewAllocator(subnet string, storagePath string) (*Allocator, error) {
@@ -20,48 +34,200 @@ func NewAllocator(subnet string, storagePath string) (*Allocator, error) {
 		return nil, fmt.Errorf("parsing prefix from subnet %s: %w", subnet, err)
 	}
 
+	broadcast := processBroadcastIP(prefix)
+
 	return &Allocator{
 		prefix,
 		storagePath,
 		prefix.Masked().Addr().Next(),
+		prefix.Masked().Addr(),
+		broadcast,
 	}, nil
+}
+
+func processBroadcastIP(prefix netip.Prefix) netip.Addr {
+	network := prefix.Masked().Addr()
+	networkBytes := network.As4()
+
+	mask := ^uint32(0) >> prefix.Masked().Bits()
+
+	broadcastBits := binary.BigEndian.Uint32(networkBytes[:]) | mask
+
+	var buf [4]byte
+
+	binary.BigEndian.PutUint32(buf[:], broadcastBits)
+
+	return netip.AddrFrom4(buf)
+}
+
+func (a *Allocator) BroadcastIP() string {
+	return a.broadcastIP.String()
 }
 
 func (a *Allocator) GatewayIP() string {
 	return a.subnet.Masked().Addr().Next().String()
 }
 
-func (a *Allocator) Allocate() (netip.Prefix, error) {
-	var candidate netip.Addr
+func (a *Allocator) Deallocate(containerID string) error {
+	// state := IPAMState{}
 
-	data, err := os.ReadFile(a.storagePath)
-	if errors.Is(err, os.ErrNotExist) {
+	// data, err := os.ReadFile(a.storagePath)
+	// if err != nil {
+	// 	return false
+	// }
 
-		networkIp := a.subnet.Masked().Addr()
+	// err = json.Unmarshal(data, &state)
+	// if err != nil {
+	// 	return false
+	// }
 
-		candidate = networkIp.Next().Next()
-
-	} else if err != nil {
-		return netip.Prefix{}, fmt.Errorf("reading file %s: %w", a.storagePath, err)
-	} else {
-		candidate, err = netip.ParseAddr(string(data))
-		if err != nil {
-			return netip.Prefix{}, fmt.Errorf("parsing IP from file %s: %w", a.storagePath, err)
+	err := a.withLockedState(func(a *IPAMState) error {
+		if a.AllocatedSet[a.ContainerToIp[containerID]] == false {
+			return nil
 		}
-	}
 
-	if !candidate.IsValid() {
-		return netip.Prefix{}, fmt.Errorf("parsed IP is invalid: %s", candidate)
-	}
+		a.AllocatedSet[a.ContainerToIp[containerID]] = false
 
-	if !a.subnet.Contains(candidate) {
-		return netip.Prefix{}, fmt.Errorf("no IP addresses available in range %s", a.subnet)
-	}
+		delete(a.ContainerToIp, containerID)
 
-	err = os.WriteFile(a.storagePath, []byte(candidate.Next().String()), 0644)
+		return nil
+	})
+
+	return err
+}
+
+func (a *Allocator) defaultState() *IPAMState {
+	state := &IPAMState{}
+	// set reserved addresses (network addr & gateway address) as allocated
+	state.AllocatedSet = make(map[netip.Addr]bool)
+	state.AllocatedSet[a.networkIP] = true
+	state.AllocatedSet[a.networkIP.Next()] = true
+
+	return state
+}
+
+func (a *Allocator) withLockedState(fn func(*IPAMState) error) error {
+	var state *IPAMState
+	var file *os.File
+
+	file, err := os.OpenFile(a.storagePath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		return netip.Prefix{}, fmt.Errorf("writing in file %s: %w", a.storagePath, err)
+		return fmt.Errorf("opening/creating file: %w", err)
+	}
+	slog.Debug("Opened/created file", "file", a.storagePath)
+
+	fd := int(file.Fd())
+
+	err = unix.Flock(fd, unix.LOCK_EX)
+	if err != nil {
+		return err
+	}
+	slog.Debug("Locked file with Flock syscall", "file", a.storagePath)
+
+	defer func() {
+		unix.Flock(fd, unix.LOCK_UN)
+		file.Close()
+	}()
+
+	fileStat, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("Error reading file stats")
+	}
+	slog.Debug("Read file stat", "file", a.storagePath)
+
+	data := make([]byte, fileStat.Size())
+
+	size, err := file.Read(data)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	slog.Debug("Read file content", "file", a.storagePath)
+
+	if size != 0 {
+		err := json.Unmarshal(data, &state)
+		if err != nil {
+			return err
+		}
+		slog.Debug("State file exists -- unmarshal content", "file", a.storagePath)
+	} else {
+		state = a.defaultState()
+		slog.Debug("State file doesn't exist -- build default state", "file", a.storagePath)
 	}
 
-	return netip.PrefixFrom(candidate, a.subnet.Bits()), nil
+	err = fn(state)
+	if err != nil {
+		return err
+	}
+	slog.Debug("Called wrapped func")
+
+	newStateBytes, err := json.MarshalIndent(state, "", "	")
+
+	err = os.WriteFile(a.storagePath, newStateBytes, 0644)
+	if err != nil {
+		return fmt.Errorf("writing in file %s: %w", a.storagePath, err)
+	}
+	slog.Debug("Wrote new IPAM state", "file", a.storagePath)
+
+	return nil
+}
+
+func (a *Allocator) Allocate(containerID string) (netip.Prefix, error) {
+	var candidate *netip.Addr
+
+	slog.Debug("Start allocator")
+
+	err := a.withLockedState(func(i *IPAMState) error {
+		val, ok := i.ContainerToIp[containerID]
+		if ok {
+			candidate = &val
+			return nil
+		}
+
+		if i.ContainerToIp == nil {
+			addr := a.networkIP.Next().Next()
+			candidate = &addr
+		} else {
+			for _, ip := range i.ContainerToIp {
+				leftCandidate := ip.Prev()
+				leftCheck := !i.AllocatedSet[leftCandidate] && leftCandidate.IsValid() && a.subnet.Contains(leftCandidate) && leftCandidate != a.broadcastIP
+				if leftCheck {
+					candidate = &leftCandidate
+					break
+				}
+
+				rightCandidate := ip.Next()
+				rightCheck := !i.AllocatedSet[rightCandidate] && rightCandidate.IsValid() && a.subnet.Contains(rightCandidate) && rightCandidate != a.broadcastIP
+				if rightCheck {
+					candidate = &rightCandidate
+					break
+				}
+			}
+		}
+
+		if candidate == nil {
+			return fmt.Errorf("no IP addresses available in range %s", a.subnet)
+		}
+
+		slog.Debug("Available IP found", "IP", candidate)
+
+		if i.ContainerToIp == nil {
+			i.ContainerToIp = make(map[string]netip.Addr)
+		}
+
+		if i.AllocatedSet == nil {
+			i.AllocatedSet = make(map[netip.Addr]bool)
+		}
+
+		i.ContainerToIp[containerID] = *candidate
+		i.AllocatedSet[*candidate] = true
+
+		return nil
+
+	})
+
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+
+	return netip.PrefixFrom(*candidate, a.subnet.Bits()), nil
 }

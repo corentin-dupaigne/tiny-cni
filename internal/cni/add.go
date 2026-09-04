@@ -23,6 +23,7 @@ func Add(args *skel.CmdArgs) error {
 		Bridge:      conf.Bridge,
 		IfName:      args.IfName,
 		Netns:       args.Netns,
+		ContainerID: args.ContainerID,
 	})
 
 	if err != nil {
