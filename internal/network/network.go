@@ -24,6 +24,14 @@ type SetupParams struct {
 	ContainerID string
 }
 
+type TeardownParams struct {
+	StoragePath string
+	Subnet      string
+	ContainerID string
+	Netns       string
+	IfName      string
+}
+
 type resIp struct {
 	Address     net.IPNet
 	Gateway     string
@@ -82,6 +90,57 @@ func bridge(bridgeName string) (netlink.Link, error) {
 	return bridge, nil
 }
 
+func Teardown(args TeardownParams) error {
+	// open pod's namespace file to obtain its fd
+	file, err := os.OpenFile(args.Netns, os.O_RDONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("opening namespace file: %w", err)
+	}
+	slog.Debug("Openend given pod's namespace file", "ns", args.Netns)
+
+	defer file.Close()
+	ch := make(chan error)
+	go func(fd int, nstype int) {
+		// lock goroutine on the thread it is currently on
+		runtime.LockOSThread()
+
+		err := unix.Setns(fd, nstype)
+		if err != nil {
+			ch <- fmt.Errorf("switching netns: %w", err)
+			return
+		}
+
+		podIf, err := netlink.LinkByName(args.IfName)
+		if err != nil {
+			ch <- fmt.Errorf("searching pod's interface: %w", err)
+			return
+		}
+		slog.Debug("Searched for pod's interface")
+
+		netlink.LinkDel(podIf)
+
+		slog.Debug("Deleted veth from pod's side")
+
+		ch <- nil
+	}(int(file.Fd()), unix.CLONE_NEWNET)
+
+	err = <-ch
+
+	if err != nil {
+		return err
+	}
+
+	alloc, err := ipam.NewAllocator(args.Subnet, args.StoragePath)
+	if err != nil {
+		return fmt.Errorf("Instantiating allocator: %w", err)
+	}
+	slog.Debug("Instantiated allocator")
+
+	err = alloc.Deallocate(args.ContainerID)
+
+	return err
+}
+
 func Setup(args SetupParams) (*SetupSuccess, error) {
 	success := false
 
@@ -106,7 +165,7 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 	slog.Debug("Bridge found", "bridge name", bridge.Attrs().Name)
 
 	// open pod's namespace file to obtain its fd
-	file, err := os.OpenFile(args.Netns, os.O_RDONLY, 0600)
+	file, err := os.OpenFile(args.Netns, os.O_RDONLY, 0644)
 	if err != nil {
 		return &SetupSuccess{}, fmt.Errorf("opening namespace file: %w", err)
 	}
@@ -168,6 +227,7 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 	// switch to pod's namespace, set pod's ip
 	ch := make(chan error)
 	go func(fd int, nstype int) {
+		// lock goroutine on the thread it is currently on
 		runtime.LockOSThread()
 
 		err := unix.Setns(fd, nstype)
