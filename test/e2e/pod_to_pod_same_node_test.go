@@ -18,10 +18,10 @@ import (
 
 // the pods must exchange actual traffic, not merely look correctly wired
 func TestPodsOnSameNodeExchangeTraffic(t *testing.T) {
-	newNode(t)
+	n := newNode(t)
 
-	a := newPod(t, "pod-a")
-	b := newPod(t, "pod-b")
+	a := newPod(t, n, "pod-a")
+	b := newPod(t, n, "pod-b")
 
 	t.Logf("%s=%s %s=%s", a.name, a.addr.IPNet, b.name, b.addr.IPNet)
 
@@ -83,10 +83,10 @@ func TestPodsOnSameNodeExchangeTraffic(t *testing.T) {
 // the pods are on the same subnet, so they should find each other by ARP over
 // the bridge rather than through some route out of the namespace
 func TestPodsOnSameNodeResolveEachOtherAtLayer2(t *testing.T) {
-	newNode(t)
+	n := newNode(t)
 
-	a := newPod(t, "pod-a")
-	b := newPod(t, "pod-b")
+	a := newPod(t, n, "pod-a")
+	b := newPod(t, n, "pod-b")
 
 	// a connection is enough to populate pod-a's neighbour table
 	ln := b.listen(t)
@@ -113,8 +113,8 @@ func TestPodsOnSameNodeResolveEachOtherAtLayer2(t *testing.T) {
 			return fmt.Errorf("listing neighbours in %s: %w", a.name, err)
 		}
 
-		for _, n := range neighs {
-			if n.IP.Equal(b.addr.IP) && n.HardwareAddr != nil {
+		for _, ne := range neighs {
+			if ne.IP.Equal(b.addr.IP) && ne.HardwareAddr != nil {
 				return nil
 			}
 		}
@@ -130,10 +130,10 @@ func TestPodsOnSameNodeResolveEachOtherAtLayer2(t *testing.T) {
 // the node side of the wiring: one bridge, both host veth ends enslaved to it
 // and up
 func TestNodeBridgeEnslavesEveryPodInterface(t *testing.T) {
-	newNode(t)
+	n := newNode(t)
 
-	newPod(t, "pod-a")
-	newPod(t, "pod-b")
+	newPod(t, n, "pod-a")
+	newPod(t, n, "pod-b")
 
 	br, err := netlink.LinkByName(bridgeName)
 	if err != nil {
@@ -148,19 +148,8 @@ func TestNodeBridgeEnslavesEveryPodInterface(t *testing.T) {
 		t.Errorf("bridge %s is down", bridgeName)
 	}
 
-	links, err := netlink.LinkList()
-	if err != nil {
-		t.Fatalf("listing links: %v", err)
-	}
-
-	enslaved := 0
-	for _, l := range links {
-		veth, ok := l.(*netlink.Veth)
-		if !ok {
-			continue
-		}
-		enslaved++
-
+	veths := hostVeths(t)
+	for _, veth := range veths {
 		if veth.Attrs().MasterIndex != br.Attrs().Index {
 			t.Errorf("host veth %s has master index %d, want %d (%s)",
 				veth.Attrs().Name, veth.Attrs().MasterIndex, br.Attrs().Index, bridgeName)
@@ -171,17 +160,17 @@ func TestNodeBridgeEnslavesEveryPodInterface(t *testing.T) {
 		}
 	}
 
-	if enslaved != 2 {
-		t.Errorf("found %d host veth interfaces on the node, want 2", enslaved)
+	if len(veths) != 2 {
+		t.Errorf("found %d host veth interfaces on the node, want 2", len(veths))
 	}
 }
 
 // the bridge is created by the first pod and looked up by every pod after it,
 // instead of a second creation attempt failing the ADD
 func TestNodeBridgeIsCreatedOnce(t *testing.T) {
-	newNode(t)
+	n := newNode(t)
 
-	newPod(t, "pod-a")
+	newPod(t, n, "pod-a")
 
 	br, err := netlink.LinkByName(bridgeName)
 	if err != nil {
@@ -189,7 +178,7 @@ func TestNodeBridgeIsCreatedOnce(t *testing.T) {
 	}
 	index := br.Attrs().Index
 
-	newPod(t, "pod-b")
+	newPod(t, n, "pod-b")
 
 	br, err = netlink.LinkByName(bridgeName)
 	if err != nil {
@@ -205,9 +194,9 @@ func TestNodeBridgeIsCreatedOnce(t *testing.T) {
 // pods also need to reach themselves, which is what the loopback the plugin
 // brings up is for
 func TestPodReachesItselfOverLoopback(t *testing.T) {
-	newNode(t)
+	n := newNode(t)
 
-	p := newPod(t, "pod-a")
+	p := newPod(t, n, "pod-a")
 
 	err := p.do(func() error {
 		lo, err := netlink.LinkByName("lo")

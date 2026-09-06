@@ -28,14 +28,17 @@ endif
 
 # needs root: creates network namespaces, a bridge and veth pairs
 #
+# the plugin and the suite are built as the current user, so the build cache
+# stays out of root's hands; only the test binary runs under sudo
+#
 # RUN filters by test name (a regexp), so a single test can be run on its own:
 #   make test-e2e RUN=TestPodsOnSameNodeExchangeTraffic
 #   make test-e2e RUN=SameNode
-test-e2e:
+test-e2e: build
 	@printf "$(BLUE)Running e2e tests (requires root)...$(NC)\n"
-	@mkdir -p $(BUILD_DIR)
 	@go test -c -tags e2e -o $(BUILD_DIR)/e2e.test ./test/e2e/
-	@sudo $(BUILD_DIR)/e2e.test -test.v $(if $(RUN),-test.run '$(RUN)')
+	@sudo TINY_CNI_BIN=$(CURDIR)/$(BUILD_DIR)/$(BINARY_NAME) \
+		$(BUILD_DIR)/e2e.test -test.v $(if $(RUN),-test.run '$(RUN)')
 
 # the test names that can be passed to RUN
 list-e2e:
