@@ -1,8 +1,23 @@
 package cni
 
-import "github.com/containernetworking/cni/pkg/skel"
+import (
+	"github.com/containernetworking/cni/pkg/skel"
+	"github.com/corentin-dupaigne/tiny-cni/internal/network"
+)
 
-// to be implemented
-func Del(_ *skel.CmdArgs) error {
-	return nil
+func Del(args *skel.CmdArgs) error {
+	conf, err := Parse(args.StdinData)
+	if err != nil {
+		return err
+	}
+
+	err = network.Teardown(network.TeardownParams{
+		StoragePath: conf.IPAM.StoragePath,
+		Subnet:      conf.IPAM.Subnet,
+		ContainerID: args.ContainerID,
+		Netns:       args.Netns,
+		IfName:      args.IfName,
+	})
+
+	return err
 }
