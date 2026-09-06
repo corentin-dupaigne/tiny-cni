@@ -171,7 +171,7 @@ func (a *Allocator) Allocate(containerID string) (netip.Prefix, error) {
 			return nil
 		}
 
-		if i.ContainerToIp == nil {
+		if len(i.ContainerToIp) == 0 {
 			addr := a.networkIP.Next().Next()
 			candidate = &addr
 		} else {
@@ -198,11 +198,11 @@ func (a *Allocator) Allocate(containerID string) (netip.Prefix, error) {
 
 		slog.Debug("Available IP found", "IP", candidate)
 
-		if i.ContainerToIp == nil {
+		if len(i.ContainerToIp) == 0 {
 			i.ContainerToIp = make(map[string]netip.Addr)
 		}
 
-		if i.AllocatedSet == nil {
+		if len(i.AllocatedSet) == 0 {
 			i.AllocatedSet = make(map[netip.Addr]bool)
 		}
 
