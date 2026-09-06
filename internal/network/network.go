@@ -94,7 +94,7 @@ func Teardown(args TeardownParams) error {
 	// open pod's namespace file to obtain its fd
 	file, err := os.OpenFile(args.Netns, os.O_RDONLY, 0644)
 	if err != nil {
-		return fmt.Errorf("opening namespace file: %w", err)
+		return nil
 	}
 	slog.Debug("Openend given pod's namespace file", "ns", args.Netns)
 
@@ -112,7 +112,8 @@ func Teardown(args TeardownParams) error {
 
 		podIf, err := netlink.LinkByName(args.IfName)
 		if err != nil {
-			ch <- fmt.Errorf("searching pod's interface: %w", err)
+			// does not return error because DEl should be idempotent
+			ch <- nil
 			return
 		}
 		slog.Debug("Searched for pod's interface")
