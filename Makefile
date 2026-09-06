@@ -5,6 +5,9 @@ MAIN_PATH=./cmd/tiny-cni/
 BLUE=\033[0;34m
 NC=\033[0m
 
+# gotestsum gives nicer output; fall back to plain go test when it isn't installed
+GOTESTSUM := $(shell command -v gotestsum 2>/dev/null)
+
 .PHONY: all build test test-e2e list-e2e clean
 
 all: build
@@ -15,8 +18,12 @@ build:
 	@go build -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_PATH)
 
 test:
-	@printf "$(BLUE)Running tests with -race...$(NC)"
-	@go test -v -race ./...
+	@printf "$(BLUE)Running tests with -race...$(NC)\n"
+ifdef GOTESTSUM
+	@gotestsum --format testname -- -race -cover ./...
+else
+	@go test -v -race -cover ./...
+endif
 
 # needs root: creates network namespaces, a bridge and veth pairs
 #
