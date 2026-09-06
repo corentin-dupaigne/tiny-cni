@@ -20,7 +20,8 @@ build:
 test:
 	@printf "$(BLUE)Running tests with -race...$(NC)\n"
 ifdef GOTESTSUM
-	@gotestsum --format testname -- -race -cover ./...
+	# -p 1: gotestsum streams results live, so parallel packages interleave
+	@gotestsum --format testname -- -p 1 -race -cover ./...
 else
 	@go test -v -race -cover ./...
 endif
