@@ -1,0 +1,1 @@
+{"cniVersion":"1.1.0","name":"c-ipvlan","type":"ipvlan","master":"cni-master0","ipam":{"type":"host-local","ranges":[[{"subnet":"10.251.0.0/24"}]],"dataDir":"/run/cni-conformance-ipam"}}

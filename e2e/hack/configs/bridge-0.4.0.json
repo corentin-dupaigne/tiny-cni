@@ -1,0 +1,1 @@
+{"cniVersion":"0.4.0","name":"c-bridge04","type":"bridge","bridge":"cni-conf0","isGateway":true,"ipam":{"type":"host-local","ranges":[[{"subnet":"10.251.0.0/24"}]],"dataDir":"/run/cni-conformance-ipam"}}

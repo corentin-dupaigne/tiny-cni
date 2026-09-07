@@ -1,0 +1,1 @@
+{"cniVersion":"1.0.0","name":"tinynet","type":"tiny-cni","bridge":"tcni-bridge","prefix":"tcni","ipam":{"type":"tiny-cni","subnet":"10.244.0.0/24","storagePath":"/run/cni-conformance-tinycni.json"}}
