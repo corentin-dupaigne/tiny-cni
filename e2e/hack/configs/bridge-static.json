@@ -1,0 +1,1 @@
+{"cniVersion":"1.1.0","name":"c-static","type":"bridge","bridge":"cni-conf0","ipam":{"type":"static","addresses":[{"address":"10.251.0.9/24"}]}}

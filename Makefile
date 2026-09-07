@@ -8,7 +8,10 @@ NC=\033[0m
 # gotestsum gives nicer output; fall back to plain go test when it isn't installed
 GOTESTSUM := $(shell command -v gotestsum 2>/dev/null)
 
-.PHONY: all build test test-e2e list-e2e clean
+E2E_DIR=e2e
+E2E_CONFIG=$(E2E_DIR)/hack/configs/tiny-cni.json
+
+.PHONY: all build test test-e2e clean
 
 all: build
 
@@ -26,22 +29,16 @@ else
 	@go test -v -race -cover ./...
 endif
 
-# needs root: creates network namespaces, a bridge and veth pairs
-#
-# RUN filters by test name (a regexp), so a single test can be run on its own:
-#   make test-e2e RUN=TestPodsOnSameNodeExchangeTraffic
-#   make test-e2e RUN=SameNode
-test-e2e:
-	@printf "$(BLUE)Running e2e tests (requires root)...$(NC)\n"
-	@mkdir -p $(BUILD_DIR)
-	@go test -c -tags e2e -o $(BUILD_DIR)/e2e.test ./test/e2e/
-	@sudo $(BUILD_DIR)/e2e.test -test.v $(if $(RUN),-test.run '$(RUN)')
-
-# the test names that can be passed to RUN
-list-e2e:
-	@mkdir -p $(BUILD_DIR)
-	@go test -c -tags e2e -o $(BUILD_DIR)/e2e.test ./test/e2e/
-	@$(BUILD_DIR)/e2e.test -test.list '.*'
+# Runs the CNI conformance suite (e2e/, its own module) against the built binary.
+# BUILD_DIR is handed over as CNI_PATH so the ipam delegate resolves to the same
+# binary. Extra args pass through, e.g. make test-e2e E2E_ARGS="FOCUS='§2'".
+test-e2e: build
+	@printf "$(BLUE)Running e2e conformance suite...$(NC)\n"
+	@$(MAKE) -C $(E2E_DIR) test \
+		CNI_PLUGIN=$(abspath $(BUILD_DIR)/$(BINARY_NAME)) \
+		CNI_CONFIG=$(abspath $(E2E_CONFIG)) \
+		CNI_PATH=$(abspath $(BUILD_DIR)) \
+		$(E2E_ARGS)
 
 clean:
 	@printf "$(BLUE)Cleaning...$(NC)"
