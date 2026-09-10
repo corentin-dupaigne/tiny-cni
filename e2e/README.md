@@ -8,7 +8,7 @@ config to the plugin **unmodified**, and asserts only spec-defined, observable
 behaviour (exit codes, stdout structures, interfaces in the netns).
 
 The requirement matrix, coverage classification and scope reasoning live in
-[`CNI Conformance Test Suite — Requirements & Coverage.md`](./CNI%20Conformance%20Test%20Suite%20%E2%80%94%20Requirements%20%26%20Coverage.md).
+[`CNI Conformance Test Suite — Requirements & Coverage.md`](./requirement_and_coverage.md).
 Every spec's text carries the requirement number(s) it covers
 (`§2 ADD operation 2.3 errors when CNI_IFNAME already exists …`).
 
