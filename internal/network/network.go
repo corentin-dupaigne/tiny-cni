@@ -58,7 +58,7 @@ func generateRandName(prefix string) (string, error) {
 	return fmt.Sprintf("%s-%x", prefix, b), nil
 }
 
-func setupBridge(bridgeName string) (netlink.Link, error) {
+func setupBridge(bridgeName string, gatewayIP *netlink.Addr) (netlink.Link, error) {
 	link := netlink.NewLinkAttrs()
 	link.Name = bridgeName
 
@@ -69,6 +69,16 @@ func setupBridge(bridgeName string) (netlink.Link, error) {
 		return nil, fmt.Errorf("deploying bridge: %w", err)
 	}
 
+	err = netlink.AddrAdd(bridge, gatewayIP)
+	if err != nil {
+		return nil, fmt.Errorf("adding addr to bridge: %w", err)
+	}
+
+	err = netlink.LinkSetUp(bridge)
+	if err != nil {
+		return nil, fmt.Errorf("set bridge up: %w", err)
+	}
+
 	err = netlink.LinkSetUp(bridge)
 	if err != nil {
 		return nil, fmt.Errorf("set bridge up: %w", err)
@@ -77,12 +87,12 @@ func setupBridge(bridgeName string) (netlink.Link, error) {
 	return bridge, nil
 }
 
-func bridge(bridgeName string) (netlink.Link, error) {
+func bridge(bridgeName string, gatewayIP netlink.Addr) (netlink.Link, error) {
 	bridge, err := netlink.LinkByName(bridgeName)
 
 	var notFound netlink.LinkNotFoundError
 	if err != nil && errors.As(err, &notFound) {
-		return setupBridge(bridgeName)
+		return setupBridge(bridgeName, &gatewayIP)
 	} else if err != nil {
 		return nil, fmt.Errorf("searching for bridge by name: %w", err)
 	}
@@ -149,6 +159,12 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 	res.Interfaces = []resInterface{}
 	res.Ips = []resIp{}
 
+	alloc, err := ipam.NewAllocator(args.Subnet, args.StoragePath)
+	if err != nil {
+		return &SetupSuccess{}, fmt.Errorf("Instantiating allocator: %w", err)
+	}
+	slog.Debug("Instantiated allocator")
+
 	hostIFNAME := netlink.NewLinkAttrs()
 	name, err := generateRandName(args.Prefix)
 	if err != nil {
@@ -159,7 +175,12 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 	veth := netlink.NewVeth(hostIFNAME)
 	veth.PeerName = args.IfName
 
-	bridge, err := bridge(args.Bridge)
+	gatewayIP, err := netlink.ParseAddr(alloc.GatewayIP())
+	if err != nil {
+		return &SetupSuccess{}, fmt.Errorf("parsing gatewayIP: %w", err)
+	}
+
+	bridge, err := bridge(args.Bridge, *gatewayIP)
 	if err != nil {
 		return &SetupSuccess{}, err
 	}
@@ -212,12 +233,6 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 		return &SetupSuccess{}, fmt.Errorf("set up host interface: %w", err)
 	}
 	slog.Debug("Set host interface UP")
-
-	alloc, err := ipam.NewAllocator(args.Subnet, args.StoragePath)
-	if err != nil {
-		return &SetupSuccess{}, fmt.Errorf("Instantiating allocator: %w", err)
-	}
-	slog.Debug("Instantiated allocator")
 
 	ip, err := alloc.Allocate(args.ContainerID)
 	if err != nil {
@@ -289,6 +304,14 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 			return
 		}
 		slog.Debug("Set up pod's lo interface")
+
+		defaultRoute, _ := netlink.ParseAddr("0.0.0.0/0")
+		route := &netlink.Route{Dst: defaultRoute.IPNet, Gw: gatewayIP.IP, LinkIndex: podIf.Attrs().Index}
+
+		err = netlink.RouteAdd(route)
+		if err != nil {
+			ch <- fmt.Errorf("set default route: %w", err)
+		}
 
 		ch <- nil
 	}(int(file.Fd()), unix.CLONE_NEWNET)
