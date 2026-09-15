@@ -16,7 +16,7 @@ import (
 type Allocator struct {
 	subnet      netip.Prefix
 	storagePath string
-	gatewayIP   netip.Addr
+	gatewayIP   netip.Prefix
 	networkIP   netip.Addr
 	broadcastIP netip.Addr
 }
@@ -39,7 +39,7 @@ func NewAllocator(subnet string, storagePath string) (*Allocator, error) {
 	return &Allocator{
 		prefix,
 		storagePath,
-		prefix.Masked().Addr().Next(),
+		netip.PrefixFrom(prefix.Masked().Addr().Next(), prefix.Bits()),
 		prefix.Masked().Addr(),
 		broadcast,
 	}, nil
@@ -65,7 +65,7 @@ func (a *Allocator) BroadcastIP() string {
 }
 
 func (a *Allocator) GatewayIP() string {
-	return a.subnet.Masked().Addr().Next().String()
+	return a.gatewayIP.String()
 }
 
 func (a *Allocator) Deallocate(containerID string) error {
