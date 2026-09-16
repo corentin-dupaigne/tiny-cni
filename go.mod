@@ -8,4 +8,7 @@ require (
 	golang.org/x/sys v0.47.0
 )
 
-require github.com/vishvananda/netns v0.0.5 // indirect
+require (
+	github.com/coreos/go-iptables v0.8.0
+	github.com/vishvananda/netns v0.0.5 // indirect
+)

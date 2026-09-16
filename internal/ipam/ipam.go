@@ -64,6 +64,10 @@ func (a *Allocator) BroadcastIP() string {
 	return a.broadcastIP.String()
 }
 
+func (a *Allocator) Subnet() string {
+	return a.subnet.String()
+}
+
 func (a *Allocator) GatewayIP() string {
 	return a.gatewayIP.String()
 }

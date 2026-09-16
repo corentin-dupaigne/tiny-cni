@@ -10,6 +10,7 @@ import (
 	"runtime"
 
 	"github.com/corentin-dupaigne/tiny-cni/internal/ipam"
+	"github.com/coreos/go-iptables/iptables"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
@@ -164,6 +165,22 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 		return &SetupSuccess{}, fmt.Errorf("Instantiating allocator: %w", err)
 	}
 	slog.Debug("Instantiated allocator")
+
+	// add masquerade rule
+	ipt, err := iptables.New()
+	if err != nil {
+		return &SetupSuccess{}, err
+	}
+
+	err = os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte{'1'}, 0644)
+	if err != nil {
+		return &SetupSuccess{}, fmt.Errorf("activating IP forwarding: %w", err)
+	}
+
+	err = ipt.AppendUnique("nat", "POSTROUTING", "-s", alloc.Subnet(), "!", "-d", alloc.Subnet(), "-j", "MASQUERADE")
+	if err != nil {
+		return &SetupSuccess{}, fmt.Errorf("add masquerade rule: %w", err)
+	}
 
 	hostIFNAME := netlink.NewLinkAttrs()
 	name, err := generateRandName(args.Prefix)
