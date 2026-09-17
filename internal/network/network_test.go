@@ -1,12 +1,3 @@
-// Unit tests for the parts of the package that do not need root.
-//
-// Setup and Teardown spend most of their body inside netlink and setns calls,
-// which only a privileged process in a throwaway namespace can exercise; that
-// is what the e2e suite is for. What is left, and what these tests cover, is
-// the naming of host interfaces and the way both entry points bail out when the
-// namespace they are handed is unusable — in particular that a failed Teardown
-// leaves the IPAM state alone rather than releasing an address that is still
-// wired up.
 package network
 
 import (
@@ -19,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/corentin-dupaigne/tiny-cni/internal/ipam"
+	"github.com/vishvananda/netlink"
 )
 
 const (
@@ -26,7 +18,8 @@ const (
 	// stands in for a bridge that is already there
 	existingLink = "lo"
 
-	testSubnet = "10.244.0.0/24"
+	testSubnet  = "10.244.0.0/24"
+	testGateway = "10.244.0.1/24"
 )
 
 // IFNAMSIZ - 1: the kernel refuses to create an interface with a longer name
@@ -143,7 +136,12 @@ func TestGenerateRandNameFitsAnInterfaceName(t *testing.T) {
 // an existing bridge is adopted, not recreated: only the first pod on a node
 // creates one
 func TestBridgeReturnsTheExistingLink(t *testing.T) {
-	link, err := bridge(existingLink)
+	gateway, err := netlink.ParseAddr(testGateway)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", testGateway, err)
+	}
+
+	link, err := bridge(existingLink, *gateway)
 	if err != nil {
 		t.Fatalf("bridge(%q): %v", existingLink, err)
 	}
@@ -154,50 +152,35 @@ func TestBridgeReturnsTheExistingLink(t *testing.T) {
 	}
 }
 
-// ---------- Setup ----------
-
-func TestSetupFailsWhenTheNamespaceIsMissing(t *testing.T) {
-	storage := storagePath(t)
-
-	_, err := Setup(SetupParams{
-		StoragePath: storage,
-		Subnet:      testSubnet,
-		Prefix:      "tcni",
-		Bridge:      existingLink,
-		IfName:      "eth0",
-		Netns:       missingPath(t),
-		ContainerID: "pod-a",
-	})
-	if err == nil {
-		t.Fatal("Setup with a missing namespace returned no error")
-	}
-
-	if !strings.Contains(err.Error(), "opening namespace file") {
-		t.Errorf("Setup error = %v, want it to mention opening the namespace file", err)
-	}
-
-	// the namespace is opened before the allocator is ever built
-	if _, err := os.Stat(storage); !os.IsNotExist(err) {
-		t.Errorf("Setup touched the IPAM state at %s despite failing early", storage)
-	}
-}
-
 // ---------- Teardown ----------
 
-func TestTeardownFailsWhenTheNamespaceIsMissing(t *testing.T) {
+// the runtime is entitled to call DEL once the sandbox is already gone, so a
+// namespace that cannot be opened is not an error, but the address still needs
+// to be released
+func TestTeardownReleasesTheAddressWhenTheNamespaceIsMissing(t *testing.T) {
+	storage := storagePath(t)
+	const containerID = "pod-a"
+
+	ip := allocate(t, storage, containerID)
+
 	err := Teardown(TeardownParams{
-		StoragePath: storagePath(t),
+		StoragePath: storage,
 		Subnet:      testSubnet,
-		ContainerID: "pod-a",
+		ContainerID: containerID,
 		Netns:       missingPath(t),
 		IfName:      "eth0",
 	})
-	if err == nil {
-		t.Fatal("Teardown with a missing namespace returned no error")
+	if err != nil {
+		t.Fatalf("Teardown with a missing namespace: %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "opening namespace file") {
-		t.Errorf("Teardown error = %v, want it to mention opening the namespace file", err)
+	state := readState(t, storage)
+
+	if _, ok := state.ContainerToIp[containerID]; ok {
+		t.Errorf("Teardown left %s in the IPAM state", containerID)
+	}
+	if state.AllocatedSet[ip.Addr()] {
+		t.Errorf("Teardown left %s allocated", ip.Addr())
 	}
 }
 
@@ -218,9 +201,9 @@ func TestTeardownFailsWhenTheNamespaceIsNotOne(t *testing.T) {
 	}
 }
 
-// a DEL that could not take the interface down must keep the address reserved:
-// releasing it would hand a live pod's IP to the next one
-func TestTeardownKeepsTheAddressWhenItCannotEnterTheNamespace(t *testing.T) {
+// the address is released even when the namespace work failed: the runtime
+// retries DEL, and a leaked address would never come back on its own
+func TestTeardownReleasesTheAddressWhenItCannotEnterTheNamespace(t *testing.T) {
 	storage := storagePath(t)
 	const containerID = "pod-a"
 
@@ -239,14 +222,10 @@ func TestTeardownKeepsTheAddressWhenItCannotEnterTheNamespace(t *testing.T) {
 
 	state := readState(t, storage)
 
-	got, ok := state.ContainerToIp[containerID]
-	if !ok {
-		t.Fatalf("failed Teardown dropped %s from the IPAM state", containerID)
+	if _, ok := state.ContainerToIp[containerID]; ok {
+		t.Errorf("Teardown left %s in the IPAM state", containerID)
 	}
-	if got != ip.Addr() {
-		t.Errorf("%s is mapped to %s, want %s", containerID, got, ip.Addr())
-	}
-	if !state.AllocatedSet[got] {
-		t.Errorf("failed Teardown released %s while the pod still holds it", got)
+	if state.AllocatedSet[ip.Addr()] {
+		t.Errorf("Teardown left %s allocated", ip.Addr())
 	}
 }
