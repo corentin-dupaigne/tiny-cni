@@ -154,11 +154,11 @@ func TestNewAllocatorDoesNotTouchStorage(t *testing.T) {
 
 func TestGatewayIP(t *testing.T) {
 	cases := map[string]string{
-		"10.0.0.0/24":    "10.0.0.1",
-		"172.16.0.0/20":  "172.16.0.1",
-		"192.168.1.0/29": "192.168.1.1",
-		"10.1.2.64/26":   "10.1.2.65",
-		"10.1.2.100/24":  "10.1.2.1", // unmasked input must be masked first
+		"10.0.0.0/24":    "10.0.0.1/24",
+		"172.16.0.0/20":  "172.16.0.1/20",
+		"192.168.1.0/29": "192.168.1.1/29",
+		"10.1.2.64/26":   "10.1.2.65/26",
+		"10.1.2.100/24":  "10.1.2.1/24", // unmasked input must be masked first
 	}
 	for subnet, want := range cases {
 		t.Run(subnet, func(t *testing.T) {
