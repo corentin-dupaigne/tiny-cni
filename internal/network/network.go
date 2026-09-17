@@ -80,11 +80,6 @@ func setupBridge(bridgeName string, gatewayIP *netlink.Addr) (netlink.Link, erro
 		return nil, fmt.Errorf("set bridge up: %w", err)
 	}
 
-	err = netlink.LinkSetUp(bridge)
-	if err != nil {
-		return nil, fmt.Errorf("set bridge up: %w", err)
-	}
-
 	return bridge, nil
 }
 
@@ -104,44 +99,41 @@ func bridge(bridgeName string, gatewayIP netlink.Addr) (netlink.Link, error) {
 func Teardown(args TeardownParams) error {
 	// open pod's namespace file to obtain its fd
 	file, err := os.OpenFile(args.Netns, os.O_RDONLY, 0644)
-	if err != nil {
-		return nil
-	}
-	slog.Debug("Openend given pod's namespace file", "ns", args.Netns)
 
-	defer file.Close()
-	ch := make(chan error)
-	go func(fd int, nstype int) {
-		// lock goroutine on the thread it is currently on
-		runtime.LockOSThread()
+	var nsErr error
+	if err == nil {
+		defer file.Close()
+		ch := make(chan error)
+		go func(fd int, nstype int) {
+			// lock goroutine on the thread it is currently on
+			runtime.LockOSThread()
 
-		err := unix.Setns(fd, nstype)
-		if err != nil {
-			ch <- fmt.Errorf("switching netns: %w", err)
-			return
-		}
+			err := unix.Setns(fd, nstype)
+			if err != nil {
+				ch <- fmt.Errorf("switching netns: %w", err)
+				return
+			}
 
-		podIf, err := netlink.LinkByName(args.IfName)
-		if err != nil {
-			// does not return error because DEl should be idempotent
+			podIf, err := netlink.LinkByName(args.IfName)
+			if err != nil {
+				// does not return error because DEl should be idempotent
+				ch <- nil
+				return
+			}
+			slog.Debug("Searched for pod's interface")
+
+			netlink.LinkDel(podIf)
+
+			slog.Debug("Deleted veth from pod's side")
+
 			ch <- nil
-			return
-		}
-		slog.Debug("Searched for pod's interface")
+		}(int(file.Fd()), unix.CLONE_NEWNET)
 
-		netlink.LinkDel(podIf)
-
-		slog.Debug("Deleted veth from pod's side")
-
-		ch <- nil
-	}(int(file.Fd()), unix.CLONE_NEWNET)
-
-	err = <-ch
-
-	if err != nil {
-		return err
+		nsErr = <-ch
 	}
+	slog.Debug("Teardown pod", "ns", args.Netns)
 
+	// free container IP
 	alloc, err := ipam.NewAllocator(args.Subnet, args.StoragePath)
 	if err != nil {
 		return fmt.Errorf("Instantiating allocator: %w", err)
@@ -149,8 +141,11 @@ func Teardown(args TeardownParams) error {
 	slog.Debug("Instantiated allocator")
 
 	err = alloc.Deallocate(args.ContainerID)
+	if err != nil {
+		return err
+	}
 
-	return err
+	return nsErr
 }
 
 func Setup(args SetupParams) (*SetupSuccess, error) {
@@ -328,6 +323,7 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 		err = netlink.RouteAdd(route)
 		if err != nil {
 			ch <- fmt.Errorf("set default route: %w", err)
+			return
 		}
 
 		ch <- nil
