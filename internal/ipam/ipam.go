@@ -78,7 +78,7 @@ func (a *Allocator) Deallocate(containerID string) error {
 			return nil
 		}
 
-		a.AllocatedSet[a.ContainerToIp[containerID]] = false
+		delete(a.AllocatedSet, a.ContainerToIp[containerID])
 
 		delete(a.ContainerToIp, containerID)
 
