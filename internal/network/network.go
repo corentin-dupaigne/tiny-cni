@@ -177,6 +177,18 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 		return &SetupSuccess{}, fmt.Errorf("add masquerade rule: %w", err)
 	}
 
+	// Set forward policy to ACCEPT -- if not set, pod-to-pod and pod-to-internet packets would be dropped in some clusters
+	// By default Docker set the forward policy to drop
+	err = ipt.AppendUnique("filter", "FORWARD", "-s", alloc.Subnet(), "-j", "ACCEPT")
+	if err != nil {
+		return &SetupSuccess{}, fmt.Errorf("add forward rule for traffic from pods: %w", err)
+	}
+
+	err = ipt.AppendUnique("filter", "FORWARD", "-d", alloc.Subnet(), "-j", "ACCEPT")
+	if err != nil {
+		return &SetupSuccess{}, fmt.Errorf("add forward rule for traffic to pods: %w", err)
+	}
+
 	hostIFNAME := netlink.NewLinkAttrs()
 	name, err := generateRandName(args.Prefix)
 	if err != nil {
