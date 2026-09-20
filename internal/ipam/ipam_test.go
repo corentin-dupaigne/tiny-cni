@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -282,7 +283,10 @@ func TestAllocateReusesAddressesAfterDeallocate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Allocate: %v", err)
 	}
-	alloc.Deallocate("container-a")
+	err2 := alloc.Deallocate("container-a")
+	if err2 != nil {
+		slog.Error("deallocating container-a", "err", err2)
+	}
 
 	state := readState(t, path)
 	if state.AllocatedSet[first.Addr()] {

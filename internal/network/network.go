@@ -102,7 +102,13 @@ func Teardown(args TeardownParams) error {
 
 	var nsErr error
 	if err == nil {
-		defer file.Close()
+		defer func() {
+			err := file.Close()
+			if err != nil {
+				slog.Error("can't close netns file in defer", "err", err, "netns", args.Netns)
+			}
+		}()
+
 		ch := make(chan error)
 		go func(fd int, nstype int) {
 			// lock goroutine on the thread it is currently on
@@ -122,7 +128,10 @@ func Teardown(args TeardownParams) error {
 			}
 			slog.Debug("Searched for pod's interface")
 
-			netlink.LinkDel(podIf)
+			err = netlink.LinkDel(podIf)
+			if err != nil {
+				ch <- nil
+			}
 
 			slog.Debug("Deleted veth from pod's side")
 
@@ -136,7 +145,7 @@ func Teardown(args TeardownParams) error {
 	// free container IP
 	alloc, err := ipam.NewAllocator(args.Subnet, args.StoragePath)
 	if err != nil {
-		return fmt.Errorf("Instantiating allocator: %w", err)
+		return fmt.Errorf("instantiating allocator: %w", err)
 	}
 	slog.Debug("Instantiated allocator")
 
@@ -157,7 +166,7 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 
 	alloc, err := ipam.NewAllocator(args.Subnet, args.StoragePath)
 	if err != nil {
-		return &SetupSuccess{}, fmt.Errorf("Instantiating allocator: %w", err)
+		return &SetupSuccess{}, fmt.Errorf("instantiating allocator: %w", err)
 	}
 	slog.Debug("Instantiated allocator")
 
@@ -217,7 +226,12 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 	}
 	slog.Debug("Openend given pod's namespace file", "ns", args.Netns)
 
-	defer file.Close()
+	defer func() {
+		err := file.Close()
+		if err != nil {
+			slog.Error("closing file", "err", err)
+		}
+	}()
 
 	veth.PeerNamespace = netlink.NsFd(file.Fd())
 
