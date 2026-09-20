@@ -1,0 +1,10 @@
+# Used by goreleaser, therefore no build stage is needed because goreleaser already built the binary
+FROM alpine:latest
+
+WORKDIR /app
+
+COPY tiny-cni .
+COPY docker/config-default.json .
+COPY docker/deploy.sh .
+
+ENTRYPOINT ["./deploy.sh"]
