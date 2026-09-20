@@ -74,7 +74,7 @@ func (a *Allocator) GatewayIP() string {
 
 func (a *Allocator) Deallocate(containerID string) error {
 	err := a.withLockedState(func(a *IPAMState) error {
-		if a.AllocatedSet[a.ContainerToIp[containerID]] == false {
+		if !a.AllocatedSet[a.ContainerToIp[containerID]] {
 			return nil
 		}
 
@@ -117,13 +117,19 @@ func (a *Allocator) withLockedState(fn func(*IPAMState) error) error {
 	slog.Debug("Locked file with Flock syscall", "file", a.storagePath)
 
 	defer func() {
-		unix.Flock(fd, unix.LOCK_UN)
-		file.Close()
+		err := unix.Flock(fd, unix.LOCK_UN)
+		if err != nil {
+			slog.Error("error unlocking flock on ipam state file in defer", "err", err)
+		}
+		err = file.Close()
+		if err != nil {
+			slog.Error("error closing ipam state file in defer", "err", err)
+		}
 	}()
 
 	fileStat, err := file.Stat()
 	if err != nil {
-		return fmt.Errorf("Error reading file stats")
+		return fmt.Errorf("reading file stats")
 	}
 	slog.Debug("Read file stat", "file", a.storagePath)
 
@@ -153,6 +159,9 @@ func (a *Allocator) withLockedState(fn func(*IPAMState) error) error {
 	slog.Debug("Called wrapped func")
 
 	newStateBytes, err := json.MarshalIndent(state, "", "	")
+	if err != nil {
+		return err
+	}
 
 	err = os.WriteFile(a.storagePath, newStateBytes, 0644)
 	if err != nil {

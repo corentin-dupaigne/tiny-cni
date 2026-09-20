@@ -3,6 +3,7 @@ package ipam
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -221,7 +222,10 @@ func TestConcurrentAllocateAndDeallocate(t *testing.T) {
 				return
 			}
 			if i%2 == 0 {
-				alloc.Deallocate(id)
+				err := alloc.Deallocate(id)
+				if err != nil {
+					slog.Error("Error deallocating", "err", err)
+				}
 			}
 		}(i)
 	}
@@ -315,7 +319,10 @@ func TestCrossProcessConcurrentAllocate(t *testing.T) {
 			}
 			owner[addr] = id
 		}
-		f.Close()
+		err2 := f.Close()
+		if err2 != nil {
+			slog.Error("Closing file", "err", err2)
+		}
 		if err := scanner.Err(); err != nil {
 			t.Fatalf("scanning child output: %v", err)
 		}

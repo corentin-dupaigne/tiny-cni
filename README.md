@@ -30,7 +30,7 @@ CNI_PATH=./bin/tiny-cni \
   ./bin/tiny-cni < config.json
 ```
 
-The purpose of ADD is to plug a container into the cluster network, but it does not create any container — that's the runtime's job. On error, it deletes what had already been created.
+The purpose of ADD is to plug a container into the cluster network, but it does not create any container. On error, it deletes what had already been created.
 
 1. Reuses or creates (first container) a Linux bridge on the host named by the value of the `bridge` key in the config.
 2. Creates a veth pair: one end (host side) is named `<prefix>-<8 hex chars>` and is enslaved to the bridge, the other end is moved into the container netns (`CNI_NETNS`) and named `CNI_IFNAME`.
