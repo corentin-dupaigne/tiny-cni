@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: tiny-cni
+  namespace: kube-system
+  labels:
+    app: tiny-cni
+spec:
+  selector:
+    matchLabels:
+      app: tiny-cni
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: tiny-cni
+    spec:
+      hostNetwork: true
+      priorityClassName: system-node-critical
+      # This ensure tiny-cni gets installed on every node, even those not being ready
+      # because a CNI plugin has not been installed yet.
+      tolerations:
+        - operator: Exists
+      initContainers:
+        # Runs deploy.sh: copies the binary to /opt/cni/bin and the config to
+        # /etc/cni/net.d, then exits.
+        - name: install
+          image: ghcr.io/corentin-dupaigne/tiny-cni:1.0.0
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: cni-bin
+              mountPath: /opt/cni/bin
+            - name: cni-conf
+              mountPath: /etc/cni/net.d
+      containers:
+        # The main container sleep infinitly to keep the DaemonSet alive.
+        # Later, in a newer version the main container will be used to expose a 
+        # prometheus endpoint.
+        - name: pause
+          image: ghcr.io/corentin-dupaigne/tiny-cni:1.0.0
+          command: ["/bin/sh", "-c", "while true; do sleep 3600; done"]
+      volumes:
+        - name: cni-bin
+          hostPath:
+            path: /opt/cni/bin
+            type: DirectoryOrCreate
+        - name: cni-conf
+          hostPath:
+            path: /etc/cni/net.d
+            type: DirectoryOrCreate
