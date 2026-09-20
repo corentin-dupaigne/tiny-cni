@@ -1,0 +1,63 @@
+version: 2
+
+project_name: tiny-cni
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: tiny-cni
+    main: ./cmd/tiny-cni
+    binary: tiny-cni
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+archives:
+  - id: tiny-cni
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE*
+      - docker/config-default.json
+
+checksum:
+  name_template: checksums.txt
+
+dockers:
+  - id: tiny-cni
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile.goreleaser
+    image_templates:
+      - "ghcr.io/corentin-dupaigne/tiny-cni:{{ .Version }}"
+      - "ghcr.io/corentin-dupaigne/tiny-cni:latest"
+    extra_files:
+      - docker/config-default.json
+      - docker/deploy.sh
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.source={{ .GitURL }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+
