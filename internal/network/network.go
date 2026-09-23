@@ -131,6 +131,7 @@ func Teardown(args TeardownParams) error {
 			err = netlink.LinkDel(podIf)
 			if err != nil {
 				ch <- nil
+				return
 			}
 
 			slog.Debug("Deleted veth from pod's side")
@@ -244,6 +245,11 @@ func Setup(args SetupParams) (*SetupSuccess, error) {
 	err = netlink.LinkSetMaster(veth, bridge)
 	if err != nil {
 		return &SetupSuccess{}, err
+	}
+
+	err = netlink.LinkSetHairpin(veth, true)
+	if err != nil {
+		return &SetupSuccess{}, fmt.Errorf("set hairpin mode to true for host side's veth: %w", err)
 	}
 
 	hostVeth, err := netlink.LinkByName(name)
