@@ -18,7 +18,6 @@ import (
 type collector struct {
 	config       *config.Config
 	veths        *prometheus.Desc
-	routes       *prometheus.Desc
 	ipsAllocated *prometheus.Desc
 	ipsCapacity  *prometheus.Desc
 	ipsLeft      *prometheus.Desc
@@ -98,7 +97,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 func main() {
 	collec, err := newCollector()
 	if err != nil {
-		return
+		log.Fatalf("creating collector: %v", err)
 	}
 
 	prometheus.MustRegister(collec)
