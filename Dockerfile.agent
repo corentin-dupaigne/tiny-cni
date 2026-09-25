@@ -1,0 +1,18 @@
+FROM golang:1.26-alpine AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN go build -o bin/tiny-cni-agent ./cmd/tiny-cni-agent/
+
+# Stage run
+FROM alpine:latest AS runtime
+
+WORKDIR /app
+
+COPY --from=builder /app/bin/tiny-cni-agent .
+
+ENTRYPOINT ["./tiny-cni-agent"]

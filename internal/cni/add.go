@@ -4,11 +4,12 @@ import (
 	"github.com/containernetworking/cni/pkg/skel"
 	cnitypes "github.com/containernetworking/cni/pkg/types"
 	cniv1 "github.com/containernetworking/cni/pkg/types/100"
+	"github.com/corentin-dupaigne/tiny-cni/internal/config"
 	"github.com/corentin-dupaigne/tiny-cni/internal/network"
 )
 
 func Add(args *skel.CmdArgs) error {
-	conf, err := Parse(args.StdinData)
+	conf, err := config.Parse(args.StdinData)
 	if err != nil {
 		return err
 	}

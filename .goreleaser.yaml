@@ -20,9 +20,23 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+  - id: tiny-cni-agent
+    main: ./cmd/tiny-cni-agent
+    binary: tiny-cni-agent
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
 
 archives:
   - id: tiny-cni
+    ids: [tiny-cni]
     formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
@@ -35,9 +49,10 @@ checksum:
 
 dockers:
   - id: tiny-cni
+    ids: [tiny-cni]
     goos: linux
     goarch: amd64
-    dockerfile: Dockerfile.goreleaser
+    dockerfile: Dockerfile.init.goreleaser
     image_templates:
       - "ghcr.io/corentin-dupaigne/tiny-cni:{{ .Version }}"
       - "ghcr.io/corentin-dupaigne/tiny-cni:latest"
@@ -47,6 +62,21 @@ dockers:
     build_flag_templates:
       - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.source={{ .GitURL }}"
+  - id: tiny-cni-agent
+    ids: [tiny-cni-agent]
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile.agent.goreleaser
+    image_templates:
+      - "ghcr.io/corentin-dupaigne/tiny-cni-agent:{{ .Version }}"
+      - "ghcr.io/corentin-dupaigne/tiny-cni-agent:latest"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}-agent"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.created={{ .Date }}"

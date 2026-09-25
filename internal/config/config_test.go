@@ -1,4 +1,4 @@
-package cni
+package config
 
 import (
 	"reflect"

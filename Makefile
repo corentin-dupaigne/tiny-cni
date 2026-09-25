@@ -1,6 +1,8 @@
 BINARY_NAME=tiny-cni
+BINARY_AGENT_NAME=tiny-cni-agent
 BUILD_DIR=bin
 MAIN_PATH=./cmd/tiny-cni/
+AGENT_PATH=./cmd/tiny-cni-agent/
 
 BLUE=\033[0;34m
 NC=\033[0m
@@ -19,6 +21,7 @@ build:
 	@printf "$(BLUE)Building $(BINARY_NAME)...$(NC)"
 	@mkdir -p $(BUILD_DIR)
 	@go build -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_PATH)
+	@go build -o $(BUILD_DIR)/$(BINARY_AGENT_NAME) $(AGENT_PATH)
 
 test:
 	@printf "$(BLUE)Running tests with -race...$(NC)\n"

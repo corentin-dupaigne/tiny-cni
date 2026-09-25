@@ -15,6 +15,9 @@ spec:
     metadata:
       labels:
         app: tiny-cni
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9102"
     spec:
       hostNetwork: true
       priorityClassName: system-node-critical
@@ -35,12 +38,19 @@ spec:
             - name: cni-conf
               mountPath: /etc/cni/net.d
       containers:
-        # The main container sleep infinitly to keep the DaemonSet alive.
-        # Later, in a newer version the main container will be used to expose a 
-        # prometheus endpoint.
-        - name: pause
-          image: ghcr.io/corentin-dupaigne/tiny-cni:1.0.0
-          command: ["/bin/sh", "-c", "while true; do sleep 3600; done"]
+        # main container exposes prometheus endpoint
+        - name: agent
+          image: ghcr.io/corentin-dupaigne/tiny-cni-agent:1.1.0
+          ports:
+            - name: metrics
+              containerPort: 9102
+          volumeMounts:
+            - name: cni-conf
+              mountPath: /etc/cni/net.d
+              readOnly: true
+            - name: ipam-state
+              mountPath: /run/tinycni.json
+              readOnly: true
       volumes:
         - name: cni-bin
           hostPath:
@@ -50,3 +60,8 @@ spec:
           hostPath:
             path: /etc/cni/net.d
             type: DirectoryOrCreate
+        # Must match ipam.storagePath in docker/config-default.json
+        - name: ipam-state
+          hostPath:
+            path: /run/tinycni.json
+            type: FileOrCreate
