@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"log"
+	"net/http"
 	"net/netip"
 	"os"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	"github.com/corentin-dupaigne/tiny-cni/internal/config"
 	"github.com/corentin-dupaigne/tiny-cni/internal/ipam"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/vishvananda/netlink"
 )
 
@@ -90,4 +93,15 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.ipsAllocated, prometheus.GaugeValue, float64(len(ipamState.AllocatedSet)-2))
 	ch <- prometheus.MustNewConstMetric(c.ipsLeft, prometheus.GaugeValue, float64(capacity-len(ipamState.AllocatedSet)+2))
 	ch <- prometheus.MustNewConstMetric(c.veths, prometheus.GaugeValue, float64(c.vethCount()))
+}
+
+func main() {
+	collec, err := newCollector()
+	if err != nil {
+		return
+	}
+
+	prometheus.MustRegister(collec)
+	http.Handle("/metrics", promhttp.Handler())
+	log.Fatal(http.ListenAndServe(":9102", nil))
 }
