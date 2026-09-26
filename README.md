@@ -1,10 +1,70 @@
 # tiny-cni
 
-A minimal bridge-based CNI plugin conforming to the [official CNI spec](https://www.cni.dev/docs/spec), with a built-in IPAM.
+A minimal bridge-based CNI plugin conforming to the [official CNI spec](https://www.cni.dev/docs/spec), with a built-in IPAM, NAT egress to the internet, a Kubernetes DaemonSet install and Prometheus metrics.
 
 ![main schema](readme/hero.png)
 
-## Commands
+## Features
+
+- **Pod-to-pod** networking over a Linux bridge, on a single node.
+- **Pod-to-internet** through a gateway on the bridge and an iptables `MASQUERADE` rule.
+- **Built-in IPAM**: file-backed and `flock`-protected. Freed IPs are reused.
+- **Kubernetes install**: a DaemonSet drops the binary and the config onto every node.
+- **Metrics**: a sidecar agent exposes IPAM/veth gauges to Prometheus, and a Grafana dashboard is included.
+- **Conformance**: an implementation-agnostic e2e suite checks the plugin against the CNI spec.
+
+## Running live
+
+tiny-cni is the only CNI of a live single-node Kubernetes cluster. The screenshot shows 36 pods with their IPs allocated by tiny-cni and zero drift between allocated IPs and veths:
+
+![Grafana dashboard of the live cluster](readme/grafana.png)
+
+## Quickstart
+
+### On Kubernetes
+
+```bash
+kubectl apply -f manifests/daemonset.yaml
+```
+
+The DaemonSet runs in `kube-system` on every node, including nodes that are still `NotReady`:
+
+- the `install` init container copies `tiny-cni` to `/opt/cni/bin` and [`docker/config-default.json`](docker/config-default.json) to `/etc/cni/net.d/05-tinycni.conf`;
+- the `agent` container stays up and serves metrics on `:9102` (see [Metrics](#metrics)).
+
+Images are published to `ghcr.io/corentin-dupaigne/tiny-cni` and `ghcr.io/corentin-dupaigne/tiny-cni-agent` on each semver tag.
+
+> [!NOTE]
+> Every node gets the same `10.244.0.0/24` subnet, so tiny-cni only supports single-node clusters for now (see [Roadmap](#roadmap)).
+> The `ipam-state` hostPath in the manifest must match `ipam.storagePath` in the config.
+
+### Locally, by hand
+
+```bash
+make build                     # builds bin/tiny-cni and bin/tiny-cni-agent
+
+sudo ip netns add container2
+
+sudo CNI_COMMAND=ADD \
+  CNI_CONTAINERID=container2 \
+  CNI_IFNAME=eth0 \
+  CNI_NETNS=/var/run/netns/container2 \
+  CNI_PATH=./bin \
+  ./bin/tiny-cni < docker/config-default.json
+
+sudo ip netns exec container2 ping -c1 1.1.1.1   # pod-to-internet
+
+sudo CNI_COMMAND=DEL \
+  CNI_CONTAINERID=container2 \
+  CNI_IFNAME=eth0 \
+  CNI_NETNS=/var/run/netns/container2 \
+  CNI_PATH=./bin \
+  ./bin/tiny-cni < docker/config-default.json
+```
+
+The config format, env vars and JSON results are documented in [docs/cni-io.md](docs/cni-io.md).
+
+## How it works
 
 | Command | Status          | Mandatory |
 | ------- | --------------- | --------- |
@@ -17,126 +77,59 @@ A minimal bridge-based CNI plugin conforming to the [official CNI spec](https://
 
 ### ADD
 
-```bash
-make build
+ADD plugs an existing container netns into the node network. It does not create the container. If a step fails, ADD deletes whatever it already created.
 
-sudo ip netns add container2
-
-CNI_COMMAND=ADD \
-CNI_CONTAINERID=container2 \
-CNI_IFNAME=eth0 \
-CNI_NETNS=/var/run/netns/container2 \
-CNI_PATH=./bin/tiny-cni \
-  ./bin/tiny-cni < config.json
-```
-
-The purpose of ADD is to plug a container into the cluster network, but it does not create any container. On error, it deletes what had already been created.
-
-1. Reuses or creates (first container) a Linux bridge on the host named by the value of the `bridge` key in the config.
-2. Creates a veth pair: one end (host side) is named `<prefix>-<8 hex chars>` and is enslaved to the bridge, the other end is moved into the container netns (`CNI_NETNS`) and named `CNI_IFNAME`.
-3. Allocates an IP from the built-in IPAM and assigns it to the container veth end.
+1. **Host setup (idempotent):** turns on `net.ipv4.ip_forward` and adds three iptables rules for the subnet: `MASQUERADE` for traffic leaving the subnet, and `FORWARD ACCEPT` for traffic from and to the pods. Some hosts (Docker, for example) set the `FORWARD` policy to `DROP`.
+2. **Bridge:** reuses the bridge named by `bridge` in the config, or creates it for the first container. The bridge gets the gateway IP (`.1` of the subnet).
+3. **veth pair:** the host end is named `<prefix>-<8 hex chars>`, enslaved to the bridge and put in hairpin mode. The other end is moved into `CNI_NETNS` and renamed `CNI_IFNAME`.
+4. **IP:** allocates an address from the [IPAM](docs/ipam.md) and assigns it to the container end.
+5. **Container netns:** brings up `CNI_IFNAME` and `lo`, then adds a default route via the gateway.
 
 ![add schema](readme/add.png)
 
 ### DEL
 
-```bash
-CNI_COMMAND=DEL CNI_CONTAINERID=container2 \
-CNI_IFNAME=eth0 \
-CNI_NETNS=/var/run/netns/container2 \
-CNI_PATH=./bin/tiny-cni \
-  ./bin/tiny-cni < config.json
-```
+DEL is idempotent: a missing netns or interface is not an error.
 
-DEL deletes the interface defined by `CNI_IFNAME` inside the container at `CNI_NETNS` and deallocates the veth side IP using the IPAM module. DEL is idempotent: a missing netns or interface does not return any error.
-
-1. Switch to the container namespace (`CNI_NETNS`).
-2. Find the veth container's side interface (`CNI_IFNAME`) and delete it.
-3. Deallocate the container's IP.
+1. Switches to the container netns (`CNI_NETNS`).
+2. Deletes the container's veth end (`CNI_IFNAME`). The kernel removes the host end with it.
+3. Releases the container's IP in the IPAM.
 
 ![del schema](readme/del.png)
 
-## I/O
+## Metrics
 
-Per the CNI spec, the runtime and the plugin only ever talk through env vars, stdin, stdout, stderr and the exit code, nothing else is shared between them.
+`tiny-cni-agent` runs next to the plugin on each node and serves Prometheus metrics on `:9102/metrics`:
 
-**In:** `CNI_COMMAND` (`ADD`/`DEL`/`VERSION`), `CNI_CONTAINERID`, `CNI_NETNS`, `CNI_IFNAME` and `CNI_PATH` come in as env vars (`CNI_ARGS` is accepted but ignored). The network configuration comes in as JSON on stdin:
+| Metric                  | Meaning                                    |
+| ----------------------- | ------------------------------------------ |
+| `tinycni_capacity_ips`  | Usable IPs in the subnet                   |
+| `tinycni_allocated_ips` | IPs currently allocated to containers      |
+| `tinycni_left_ips`      | IPs still free                             |
+| `tinycni_veths`         | Host-side veths with the configured prefix |
 
-```json
-{
-  "cniVersion": "1.0.0",
-  "name": "tinynet",
-  "type": "tiny-cni",
-  "bridge": "tcni-bridge",
-  "prefix": "tcni",
-  "ipam": {
-    "type": "tiny-cni",
-    "subnet": "10.244.0.0/24",
-    "storagePath": "/tmp/tinycni-counter"
-  }
-}
-```
+A Grafana dashboard ships in [`monitoring/grafana/`](monitoring/grafana/grafana-dashboard.json) (see the [screenshot above](#running-live)). Scrape setup and dashboard details are in [docs/observability.md](docs/observability.md).
 
-`cniVersion`, `name` and `type` are the standard CNI fields; `bridge` and `prefix` drive the bridge/veth naming described above, and `ipam.subnet`/`ipam.storagePath` configure the allocator below.
-
-**Out:** on success, stdout carries the CNI `Result` as JSON, in the schema of the request's `cniVersion`; on failure, stdout carries a CNI error object as JSON (`{"code", "msg", "details"}`) instead. Either way the exit code follows: `0` on success, `1` on error. stderr only ever carries structured JSON logs (`slog`) for debugging.
-
-ADD's result lists both ends of the veth pair (host side with no `sandbox`, container side with `sandbox` set to `CNI_NETNS`) and the IP handed out by the IPAM, pointing at the container interface by index:
-
-```json
-{
-  "cniVersion": "1.0.0",
-  "interfaces": [
-    { "name": "tcni-a1b2c3d4", "mac": "aa:bb:cc:dd:ee:01" },
-    { "name": "eth0", "mac": "aa:bb:cc:dd:ee:02", "sandbox": "/var/run/netns/container2" }
-  ],
-  "ips": [
-    { "interface": 1, "address": "10.244.0.2/24" }
-  ]
-}
-```
-
-DEL has no stdout output on success (empty result). Any error, from either command, is reported as json error, as required by the CNI spec.
-
-## IPAM
-
-IPAM is part of the CNI plugin and therefore lives in the same binary. It is stateful: it uses a storage path given through the config to read and update the current IPAM state. The state contains two maps, one holding each container and its associated IP, and one tracking each allocated IP. Every IPAM operation that modifies the state uses a `flock` syscall on the file to avoid race conditions.
-
-The network and gateway addresses (`.0` and `.1` of the subnet) are reserved up front. The first container gets `.2`.
-
-IPAM state example:
-
-```json
-{
-  "containerToIp": {
-    "container1": "10.244.0.2",
-    "container2": "10.244.0.3"
-  },
-  "allocatedSet": {
-    "10.244.0.0": true,
-    "10.244.0.1": true,
-    "10.244.0.2": true,
-    "10.244.0.3": true
-  }
-}
-```
-
-## E2E
-
-The CNI conformance requirements ([spec](https://www.cni.dev/docs/spec/)) are exercised by a separate, self-contained test suite in [`e2e/`](/e2e), built on Ginkgo/Gomega. It execs the built `tiny-cni` binary like a runtime would: env vars in, stdin config in, stdout/exit code checked out and inspects the resulting network namespace, so it is agnostic to tiny-cni's internals and could run against any CNI plugin binary.
+## Development
 
 ```bash
-make test-e2e   # build + run the full suite against tiny-cni
+make build      # bin/tiny-cni + bin/tiny-cni-agent
+make test       # unit tests, with -race
+make test-e2e   # build, then run the CNI conformance suite (namespace specs need root)
 ```
 
-Namespace-touching specs need root and are skipped otherwise.
+The [`e2e/`](e2e) suite drives the built binary like a runtime would: env vars and stdin config go in, and it checks stdout, the exit code and the resulting netns. It does not depend on tiny-cni's internals, so it can run against any CNI plugin binary.
 
-## Decisions
+CI blocks merges to `main` unless `gofmt`, `go vet`, `go build`, `go test -race` and `golangci-lint` all pass. Pushing a semver tag makes goreleaser publish the binaries and images.
 
-Architecture decision records live in [docs/adr/](/docs/adr).
+## Documentation
+
+- [CNI I/O contract](docs/cni-io.md): env vars, network config, results and errors
+- [IPAM](docs/ipam.md): allocation, state file, locking
+- [Observability](docs/observability.md): metrics agent, Prometheus, Grafana
+- [Architecture decision records](docs/adr/)
 
 ## Roadmap
 
-- Add a gateway and routes so pods can reach the web (for now, pod to pod only).
-- Add VXLAN so pods can communicate across nodes (for now, single node only).
-- Add the CHECK CNI function.
+- Add VXLAN and per-node subnets so pods can talk across nodes (single node only for now).
+- Add the CHECK CNI command.
