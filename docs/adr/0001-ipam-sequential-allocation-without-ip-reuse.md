@@ -1,9 +1,11 @@
 ---
-status: Accepted
+status: superseded
 date: 2026-07-30
 ---
 
 # IPAM Sequential Allocation Without IP Reuse
+
+Superseded by [ADR 0002](0002-ipam-allocation-set-with-ip-reuse.md).
 
 ## Context
 
